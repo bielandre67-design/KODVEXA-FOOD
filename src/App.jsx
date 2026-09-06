@@ -2987,7 +2987,6 @@ function NavegacaoPainel({ loja, ativo }) {
                           </button>
                         </div>
                       </div>
-                      </div>
                     )}
 
                     <div
@@ -8608,7 +8607,17 @@ function PainelRestaurante({ sessao }) {
   return (
     <div className="painel-food">
       <NavegacaoPainel loja={loja} ativo="pedidos" />
-      <main className="conteudo-painel">
+      <main
+        className="conteudo-painel"
+        style={{
+          width: '100%',
+          maxWidth: 'none',
+          minWidth: 0,
+          boxSizing: 'border-box',
+          paddingLeft: 28,
+          paddingRight: 28,
+        }}
+      >
         {pedidosChamando.length > 0 && (
           <>
             <style>{`
@@ -8658,17 +8667,53 @@ function PainelRestaurante({ sessao }) {
           </>
         )}
 
-        <section className="resumo-painel resumo-painel-operacional">
-          <div><Clock3 /><span>Novos</span><strong>{pedidos.filter((p) => p.status === 'recebido').length}</strong></div>
-          <div><ChefHat /><span>Em preparo</span><strong>{pedidos.filter((p) => ['confirmado', 'preparando'].includes(p.status)).length}</strong></div>
-          <div><CheckCircle2 /><span>Prontos</span><strong>{pedidos.filter((p) => p.status === 'pronto').length}</strong></div>
-          <div><Bike /><span>Saiu para entrega</span><strong>{pedidos.filter((p) => p.status === 'saiu_entrega').length}</strong></div>
+        <section
+          className="resumo-painel resumo-painel-operacional"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, minmax(190px, 1fr))',
+            gap: 14,
+            width: '100%',
+            marginBottom: 26,
+          }}
+        >
+          <div style={{ minWidth: 0, padding: '18px 20px' }}><Clock3 /><span>Novos</span><strong>{pedidos.filter((p) => p.status === 'recebido').length}</strong></div>
+          <div style={{ minWidth: 0, padding: '18px 20px' }}><ChefHat /><span>Em preparo</span><strong>{pedidos.filter((p) => ['confirmado', 'preparando'].includes(p.status)).length}</strong></div>
+          <div style={{ minWidth: 0, padding: '18px 20px' }}><CheckCircle2 /><span>Prontos</span><strong>{pedidos.filter((p) => p.status === 'pronto').length}</strong></div>
+          <div style={{ minWidth: 0, padding: '18px 20px' }}><Bike /><span>Saiu para entrega</span><strong>{pedidos.filter((p) => p.status === 'saiu_entrega').length}</strong></div>
         </section>
 
-        <div className="cabecalho-lista">
+        <div
+          className="cabecalho-lista"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 20,
+            flexWrap: 'wrap',
+            width: '100%',
+            marginBottom: 10,
+          }}
+        >
           <div><h2>Pedidos</h2><p>Atualização automática dos pedidos recebidos.</p></div>
-          <div className="acoes-pedidos-topo">
-            <label className="busca-pedidos">
+          <div
+            className="acoes-pedidos-topo"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              marginLeft: 'auto',
+            }}
+          >
+            <label
+              className="busca-pedidos"
+              style={{
+                width: 360,
+                maxWidth: '42vw',
+                minWidth: 260,
+              }}
+            >
               <Search size={17} />
               <input
                 value={buscaPedidos}
@@ -8696,8 +8741,13 @@ function PainelRestaurante({ sessao }) {
         </div>
 
         <div style={{
-          display: 'flex', gap: 8, overflowX: 'auto', padding: '4px 2px 12px', marginBottom: 8,
-          scrollbarWidth: 'thin'
+          display: 'flex',
+          gap: 9,
+          flexWrap: 'wrap',
+          overflowX: 'visible',
+          padding: '4px 2px 12px',
+          marginBottom: 8,
+          width: '100%',
         }}>
           {abasFluxo.map((aba) => {
             const ativa = filtro === aba.id
@@ -8735,7 +8785,16 @@ function PainelRestaurante({ sessao }) {
           <small style={{ opacity: .58 }}>{exibidos.length} {exibidos.length === 1 ? 'pedido' : 'pedidos'}</small>
         </div>
         {erro && <p className="erro-pedido">{erro}</p>}
-        <section className="grade-pedidos">
+        <section
+          className="grade-pedidos"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 18,
+            width: '100%',
+            alignItems: 'start',
+          }}
+        >
           {exibidosOrdenados.map((pedido, index) => {
             const subtotalItens = (pedido.itens_pedido || []).reduce((soma, item) => soma + Number(item.total || 0), 0)
             const taxaEntrega = Number(pedido.taxa_entrega || Math.max(0, Number(pedido.total || 0) - subtotalItens))
@@ -8781,11 +8840,16 @@ function PainelRestaurante({ sessao }) {
               <article
                 id={`pedido-${pedido.id}`}
                 className="cartao-pedido"
-                style={pedidosChamando.some((novo) => novo.id === pedido.id)
-                  ? { border: '1px solid rgba(239,68,68,.65)', background: 'linear-gradient(180deg, rgba(39,31,45,.98), rgba(12,29,51,.98))', animation: 'kodvexaPedidoLed 1.05s ease-in-out infinite' }
-                  : pedido.status === 'recebido'
-                    ? { border: '1px solid rgba(59,130,246,.55)', background: 'linear-gradient(180deg, rgba(20,42,72,.96), rgba(12,29,51,.96))' }
-                    : undefined}
+                style={{
+                  minWidth: 0,
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  ...(pedidosChamando.some((novo) => novo.id === pedido.id)
+                    ? { border: '1px solid rgba(239,68,68,.65)', background: 'linear-gradient(180deg, rgba(39,31,45,.98), rgba(12,29,51,.98))', animation: 'kodvexaPedidoLed 1.05s ease-in-out infinite' }
+                    : pedido.status === 'recebido'
+                      ? { border: '1px solid rgba(59,130,246,.55)', background: 'linear-gradient(180deg, rgba(20,42,72,.96), rgba(12,29,51,.96))' }
+                      : {}),
+                }}
               >
                 <div className="pedido-topo">
                   <div>
