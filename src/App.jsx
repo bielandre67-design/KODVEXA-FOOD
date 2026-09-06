@@ -1618,6 +1618,8 @@ function NavegacaoPainel({ loja, ativo }) {
   const [carregandoLicencas, setCarregandoLicencas] = useState(false)
   const [ativandoLicencaTeste, setAtivandoLicencaTeste] = useState(false)
   const [matrizLicencaId, setMatrizLicencaId] = useState('')
+  const [pixFilial, setPixFilial] = useState(null)
+  const [copiouPixFilial, setCopiouPixFilial] = useState(false)
   const [formUnidade, setFormUnidade] = useState({
     nome_unidade: '',
     endereco: '',
@@ -1692,6 +1694,7 @@ function NavegacaoPainel({ loja, ativo }) {
 
     setAtivandoLicencaTeste(true)
     setErroUnidade('')
+    setCopiouPixFilial(false)
 
     try {
       const { data: sessaoData } = await supabase.auth.getSession()
@@ -1701,19 +1704,52 @@ function NavegacaoPainel({ loja, ativo }) {
         throw new Error('Sua sessão expirou. Entre novamente no painel.')
       }
 
+      if (formaPagamento === 'pix') {
+        const resposta = await fetch('/api/mercadopago-criar-pix-filial', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ matriz_id: matrizLicencaId }),
+        })
+
+        const dados = await resposta.json().catch(() => ({}))
+
+        if (!resposta.ok) {
+          throw new Error(dados?.error || 'Não foi possível gerar o Pix da filial.')
+        }
+
+        if (!dados?.qr_code || !dados?.qr_code_base64) {
+          throw new Error('O Mercado Pago não retornou o QR Code do Pix.')
+        }
+
+        setPixFilial(dados)
+        setEtapaFilial('pix')
+        setAtivandoLicencaTeste(false)
+        return
+      }
+
       const resposta = await fetch('/api/mercadopago-criar-filial', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ matriz_id: matrizLicencaId, forma_pagamento: formaPagamento }),
+        body: JSON.stringify({ matriz_id: matrizLicencaId, forma_pagamento: 'cartao' }),
       })
 
       const dados = await resposta.json().catch(() => ({}))
 
       if (!resposta.ok) {
         throw new Error(dados?.error || 'Não foi possível iniciar o pagamento da filial.')
+      }
+
+      if (dados?.licenca_ativa) {
+        await carregarLicencasDisponiveis(matrizLicencaId)
+        setEtapaFilial('cadastro')
+        setAtivandoLicencaTeste(false)
+        return
       }
 
       if (!dados?.checkout_url) {
@@ -1727,10 +1763,46 @@ function NavegacaoPainel({ loja, ativo }) {
     }
   }
 
+  useEffect(() => {
+    if (etapaFilial !== 'pix' || !matrizLicencaId) return
+
+    let cancelado = false
+
+    const verificarPagamentoPix = async () => {
+      const total = await carregarLicencasDisponiveis(matrizLicencaId)
+      if (!cancelado && total > 0) {
+        setPixFilial(null)
+        setEtapaFilial('cadastro')
+      }
+    }
+
+    verificarPagamentoPix()
+    const intervalo = setInterval(verificarPagamentoPix, 4000)
+
+    return () => {
+      cancelado = true
+      clearInterval(intervalo)
+    }
+  }, [etapaFilial, matrizLicencaId])
+
+  async function copiarCodigoPixFilial() {
+    if (!pixFilial?.qr_code) return
+
+    try {
+      await navigator.clipboard.writeText(pixFilial.qr_code)
+      setCopiouPixFilial(true)
+      setTimeout(() => setCopiouPixFilial(false), 1800)
+    } catch {
+      setErroUnidade('Não foi possível copiar automaticamente. Selecione o código e copie.')
+    }
+  }
+
   async function abrirModalNovaUnidade() {
     if (limiteUnidadesAtingido) return
 
     setErroUnidade('')
+    setPixFilial(null)
+    setCopiouPixFilial(false)
     setEtapaFilial('assinatura')
 
     const matriz = unidades.find((unidade) => unidade.tipo_unidade === 'matriz')
@@ -2687,6 +2759,162 @@ function NavegacaoPainel({ loja, ativo }) {
                       5 filiais <strong style={{ color: '#dbe6f2' }}>R$ 229,40/mês no total</strong>
                     </span>
                   </div>
+                </div>
+
+                {erroUnidade && (
+                  <div className="modal-unidade__erro" style={{ marginTop: 12 }}>
+                    {erroUnidade}
+                  </div>
+                )}
+              </div>
+            ) : etapaFilial === 'pix' ? (
+              <div
+                style={{
+                  padding: '18px',
+                  textAlign: 'center',
+                }}
+              >
+                <div
+                  style={{
+                    maxWidth: 430,
+                    margin: '0 auto',
+                    padding: '22px',
+                    border: '1px solid rgba(52,211,153,.25)',
+                    borderRadius: 18,
+                    background: 'rgba(7,28,43,.92)',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      padding: '5px 9px',
+                      borderRadius: 999,
+                      background: 'rgba(16,185,129,.12)',
+                      color: '#6ee7b7',
+                      fontSize: '.66rem',
+                      fontWeight: 950,
+                      letterSpacing: '.06em',
+                    }}
+                  >
+                    PIX GERADO
+                  </span>
+
+                  <h3 style={{ margin: '12px 0 4px', color: '#f8fafc', fontSize: '1.15rem' }}>
+                    Pague para ativar a filial
+                  </h3>
+
+                  <p style={{ margin: 0, color: '#8ea3b8', fontSize: '.76rem', lineHeight: 1.55 }}>
+                    O cadastro será liberado automaticamente assim que o Mercado Pago confirmar o pagamento.
+                  </p>
+
+                  <div
+                    style={{
+                      margin: '18px auto 10px',
+                      width: 226,
+                      maxWidth: '100%',
+                      padding: 12,
+                      borderRadius: 16,
+                      background: '#fff',
+                    }}
+                  >
+                    <img
+                      src={`data:image/png;base64,${pixFilial?.qr_code_base64 || ''}`}
+                      alt="QR Code Pix"
+                      style={{ display: 'block', width: '100%', height: 'auto' }}
+                    />
+                  </div>
+
+                  <strong style={{ display: 'block', color: '#fff', fontSize: '1.35rem', marginTop: 8 }}>
+                    {Number(pixFilial?.valor || 0).toLocaleString('pt-BR', {
+                      style: 'currency',
+                      currency: 'BRL',
+                    })}
+                  </strong>
+
+                  <small style={{ display: 'block', marginTop: 5, color: '#738aa1' }}>
+                    Pix válido por 30 minutos
+                  </small>
+
+                  <textarea
+                    readOnly
+                    value={pixFilial?.qr_code || ''}
+                    onFocus={(e) => e.currentTarget.select()}
+                    style={{
+                      width: '100%',
+                      minHeight: 72,
+                      marginTop: 16,
+                      padding: 11,
+                      resize: 'none',
+                      border: '1px solid rgba(148,163,184,.2)',
+                      borderRadius: 10,
+                      background: '#091827',
+                      color: '#b8c7d8',
+                      fontSize: '.67rem',
+                      lineHeight: 1.35,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={copiarCodigoPixFilial}
+                    style={{
+                      width: '100%',
+                      minHeight: 44,
+                      marginTop: 9,
+                      border: '1px solid #26b98b',
+                      borderRadius: 10,
+                      background: '#0f9f79',
+                      color: '#fff',
+                      fontWeight: 950,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {copiouPixFilial ? '✓ Código Pix copiado' : 'Copiar Pix copia e cola'}
+                  </button>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      gap: 7,
+                      marginTop: 14,
+                      color: '#8299b2',
+                      fontSize: '.68rem',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        background: '#34d399',
+                        boxShadow: '0 0 10px rgba(52,211,153,.6)',
+                      }}
+                    />
+                    Aguardando confirmação do pagamento...
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPixFilial(null)
+                      setEtapaFilial('assinatura')
+                    }}
+                    style={{
+                      marginTop: 14,
+                      border: 0,
+                      background: 'transparent',
+                      color: '#8299b2',
+                      fontSize: '.69rem',
+                      fontWeight: 850,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Voltar e escolher outra forma
+                  </button>
                 </div>
 
                 {erroUnidade && (

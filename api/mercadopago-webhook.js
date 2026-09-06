@@ -6,7 +6,7 @@ async function sb(path, { method = 'GET', body } = {}) {
   if (!url || !key) throw new Error('Supabase service role não configurado.')
   const r = await fetch(`${url}/rest/v1/${path}`, {
     method,
-    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+    headers: { apikey: key, 'Content-Type': 'application/json', Prefer: 'return=representation' },
     body: body ? JSON.stringify(body) : undefined,
   })
   const data = await r.json().catch(() => null)
@@ -42,13 +42,13 @@ export default async function handler(req, res) {
 
     await sb(`cobrancas_kodvexa?id=eq.${encodeURIComponent(cobrancaId)}`, {
       method: 'PATCH',
-      body: { mp_payment_id: paymentId, mp_status: status, status: status === 'approved' ? 'paga' : (status === 'rejected' || status === 'cancelled' ? 'falhou' : 'pendente'), pago_em: status === 'approved' ? new Date().toISOString() : null }
+      body: { mp_payment_id: paymentId, mp_status: status, status: status === 'approved' ? 'paga' : (status === 'rejected' || status === 'cancelled' || status === 'cancelled' || status === 'expired' ? 'falhou' : 'pendente'), pago_em: status === 'approved' ? new Date().toISOString() : null }
     })
 
     if (status !== 'approved') return res.status(200).json({ ok: true, status })
     if (Math.abs(valorPago - valorEsperado) > 0.009) throw new Error('Valor do pagamento diferente da cobrança KODVEXA.')
 
-    const licencaId = payment?.metadata?.licenca_id
+    const licencaId = String(payment?.metadata?.licenca_id || '').trim()
     if (!licencaId) throw new Error('Pagamento aprovado sem licenca_id.')
     await sb(`licencas_filiais?id=eq.${encodeURIComponent(licencaId)}&status=eq.pendente`, {
       method: 'PATCH',

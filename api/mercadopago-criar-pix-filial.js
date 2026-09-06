@@ -413,17 +413,10 @@ export default async function handler(req, res) {
 
     const origin = `${proto}://${host}`
 
-    const paymentMethods = {
-      excluded_payment_methods: [
-        { id: 'pix' },
-      ],
-      excluded_payment_types: [
-        { id: 'ticket' },
-      ],
-    }
+    const expiracao = new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
-    const preferenceResponse = await fetch(
-      `${MP_API}/checkout/preferences`,
+    const pixResponse = await fetch(
+      `${MP_API}/v1/payments`,
       {
         method: 'POST',
         headers: {
@@ -433,33 +426,21 @@ export default async function handler(req, res) {
           'X-Idempotency-Key': cobrancaId,
         },
         body: JSON.stringify({
-          items: [
-            {
-              id: 'kodvexa-filial',
-              title: `KODVEXA Food - filial (${formaPagamento === 'pix' ? 'Pix' : 'Cartão'})`,
-              quantity: 1,
-              currency_id: 'BRL',
-              unit_price: valor,
-            },
-          ],
+          transaction_amount: valor,
+          description: 'KODVEXA Food - ativação de filial',
+          payment_method_id: 'pix',
           external_reference: externalReference,
-          payment_methods: paymentMethods,
+          date_of_expiration: expiracao,
+          payer: {
+            email: user.email,
+          },
           metadata: {
             kodvexa_tipo: 'filial',
-            forma_pagamento: formaPagamento,
+            forma_pagamento: 'pix',
             matriz_id: matrizId,
             licenca_id: licencaId,
             cobranca_id: cobrancaId,
           },
-          back_urls: {
-            success:
-              `${origin}/painel/unidades?pagamento=sucesso`,
-            pending:
-              `${origin}/painel/unidades?pagamento=pendente`,
-            failure:
-              `${origin}/painel/unidades?pagamento=falhou`,
-          },
-          auto_return: 'approved',
           notification_url:
             `${origin}/api/mercadopago-webhook`,
         }),
@@ -467,11 +448,16 @@ export default async function handler(req, res) {
     )
 
     const mp =
-      await preferenceResponse.json().catch(() => ({}))
+      await pixResponse.json().catch(() => ({}))
+
+    const transactionData =
+      mp?.point_of_interaction?.transaction_data || {}
 
     if (
-      !preferenceResponse.ok ||
-      !mp?.init_point
+      !pixResponse.ok ||
+      !mp?.id ||
+      !transactionData?.qr_code ||
+      !transactionData?.qr_code_base64
     ) {
       await sbAdmin(
         `cobrancas_kodvexa?id=eq.${encodeURIComponent(
@@ -481,6 +467,7 @@ export default async function handler(req, res) {
           method: 'PATCH',
           body: {
             status: 'falhou',
+            mp_status: String(mp?.status || 'erro_criacao_pix'),
           },
         }
       )
@@ -500,19 +487,37 @@ export default async function handler(req, res) {
 
       throw new Error(
         mp?.message ||
-        'Mercado Pago não criou a preferência.'
+        mp?.cause?.[0]?.description ||
+        'Mercado Pago não conseguiu gerar o Pix.'
       )
     }
 
+    await sbAdmin(
+      `cobrancas_kodvexa?id=eq.${encodeURIComponent(
+        cobrancaId
+      )}`,
+      {
+        method: 'PATCH',
+        body: {
+          mp_payment_id: String(mp.id),
+          mp_status: String(mp.status || 'pending'),
+        },
+      }
+    )
+
     return json(res, 200, {
       ok: true,
-      checkout_url: mp.init_point,
+      payment_id: String(mp.id),
+      qr_code: transactionData.qr_code,
+      qr_code_base64: transactionData.qr_code_base64,
+      ticket_url: transactionData.ticket_url || null,
       valor,
+      expira_em: expiracao,
       proximo_vencimento: proximo,
     })
   } catch (error) {
     console.error(
-      'mercadopago-criar-filial:',
+      'mercadopago-criar-pix-filial:',
       error
     )
 
