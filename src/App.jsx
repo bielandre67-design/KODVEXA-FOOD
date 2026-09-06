@@ -1684,7 +1684,7 @@ function NavegacaoPainel({ loja, ativo }) {
     return total
   }
 
-  async function iniciarPagamentoFilial() {
+  async function iniciarPagamentoFilial(formaPagamento = 'cartao') {
     if (!matrizLicencaId) {
       setErroUnidade('Não foi possível identificar a Matriz.')
       return
@@ -1707,7 +1707,7 @@ function NavegacaoPainel({ loja, ativo }) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ matriz_id: matrizLicencaId }),
+        body: JSON.stringify({ matriz_id: matrizLicencaId, forma_pagamento: formaPagamento }),
       })
 
       const dados = await resposta.json().catch(() => ({}))
@@ -2585,34 +2585,73 @@ function NavegacaoPainel({ loja, ativo }) {
                         valor adicional ao seu plano
                       </span>
 
-                      <button
-                        type="button"
-                        onClick={
-                          licencasDisponiveis > 0
-                            ? () => setEtapaFilial('cadastro')
-                            : iniciarPagamentoFilial
-                        }
-                        disabled={ativandoLicencaTeste || carregandoLicencas}
-                        style={{
-                          width: '100%',
-                          minHeight: 46,
-                          marginTop: 20,
-                          border: '1px solid #4d8df7',
-                          borderRadius: 10,
-                          background: '#3478e5',
-                          color: '#fff',
-                          fontWeight: 950,
-                          cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
-                          opacity: ativandoLicencaTeste ? .65 : 1,
-                          boxShadow: '0 8px 22px rgba(52,120,229,.18)',
-                        }}
-                      >
-                        {ativandoLicencaTeste
-                          ? 'Abrindo pagamento...'
-                          : licencasDisponiveis > 0
-                            ? 'Cadastrar filial'
-                            : 'Adicionar filial'}
-                      </button>
+                      {licencasDisponiveis > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setEtapaFilial('cadastro')}
+                          disabled={carregandoLicencas}
+                          style={{
+                            width: '100%',
+                            minHeight: 46,
+                            marginTop: 20,
+                            border: '1px solid #4d8df7',
+                            borderRadius: 10,
+                            background: '#3478e5',
+                            color: '#fff',
+                            fontWeight: 950,
+                            cursor: 'pointer',
+                            boxShadow: '0 8px 22px rgba(52,120,229,.18)',
+                          }}
+                        >
+                          Cadastrar filial
+                        </button>
+                      ) : (
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            gap: 8,
+                            marginTop: 20,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => iniciarPagamentoFilial('pix')}
+                            disabled={ativandoLicencaTeste || carregandoLicencas}
+                            style={{
+                              minHeight: 46,
+                              border: '1px solid #26b98b',
+                              borderRadius: 10,
+                              background: '#0f9f79',
+                              color: '#fff',
+                              fontWeight: 950,
+                              cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
+                              opacity: ativandoLicencaTeste ? .65 : 1,
+                            }}
+                          >
+                            {ativandoLicencaTeste ? 'Abrindo...' : 'Pix'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => iniciarPagamentoFilial('cartao')}
+                            disabled={ativandoLicencaTeste || carregandoLicencas}
+                            style={{
+                              minHeight: 46,
+                              border: '1px solid #4d8df7',
+                              borderRadius: 10,
+                              background: '#3478e5',
+                              color: '#fff',
+                              fontWeight: 950,
+                              cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
+                              opacity: ativandoLicencaTeste ? .65 : 1,
+                              boxShadow: '0 8px 22px rgba(52,120,229,.18)',
+                            }}
+                          >
+                            {ativandoLicencaTeste ? 'Abrindo...' : 'Cartão'}
+                          </button>
+                        </div>
+                      )}
 
                       <span
                         style={{

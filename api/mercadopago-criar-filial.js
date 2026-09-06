@@ -202,6 +202,15 @@ export default async function handler(req, res) {
     }
 
     const matrizId = String(req.body?.matriz_id || '').trim()
+    const formaPagamento = String(req.body?.forma_pagamento || 'cartao')
+      .trim()
+      .toLowerCase()
+
+    if (!['pix', 'cartao'].includes(formaPagamento)) {
+      return json(res, 400, {
+        error: 'Forma de pagamento inválida.',
+      })
+    }
 
     if (!matrizId) {
       return json(res, 400, {
@@ -403,6 +412,25 @@ export default async function handler(req, res) {
 
     const origin = `${proto}://${host}`
 
+    const paymentMethods =
+      formaPagamento === 'pix'
+        ? {
+            excluded_payment_types: [
+              { id: 'credit_card' },
+              { id: 'debit_card' },
+              { id: 'prepaid_card' },
+              { id: 'ticket' },
+            ],
+          }
+        : {
+            excluded_payment_methods: [
+              { id: 'pix' },
+            ],
+            excluded_payment_types: [
+              { id: 'ticket' },
+            ],
+          }
+
     const preferenceResponse = await fetch(
       `${MP_API}/checkout/preferences`,
       {
@@ -417,15 +445,17 @@ export default async function handler(req, res) {
           items: [
             {
               id: 'kodvexa-filial',
-              title: 'KODVEXA Food - ativação de filial',
+              title: `KODVEXA Food - filial (${formaPagamento === 'pix' ? 'Pix' : 'Cartão'})`,
               quantity: 1,
               currency_id: 'BRL',
               unit_price: valor,
             },
           ],
           external_reference: externalReference,
+          payment_methods: paymentMethods,
           metadata: {
             kodvexa_tipo: 'filial',
+            forma_pagamento: formaPagamento,
             matriz_id: matrizId,
             licenca_id: licencaId,
             cobranca_id: cobrancaId,
