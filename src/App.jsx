@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, Link, Route, Routes, useParams } from 'react-router-dom'
-import { Bell, Bike, CheckCircle2, ChefHat, ChevronRight, Clock3, LogOut, MapPin, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShoppingBag, Store, X } from 'lucide-react'
+import { Bell, Bike, CheckCircle2, ChefHat, ChevronRight, Clock3, Home, LayoutGrid, LogOut, MapPin, Menu, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShoppingBag, Sparkles, Store, Trash2, X } from 'lucide-react'
 import { supabase } from './supabase'
 import './App.css'
 
@@ -71,10 +71,16 @@ function Cardapio() {
   const [categorias, setCategorias] = useState([])
   const [produtos, setProdutos] = useState([])
   const [busca, setBusca] = useState('')
+  const [categoriaSelecionada, setCategoriaSelecionada] = useState('todos')
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
   const [produtoAberto, setProdutoAberto] = useState(null)
   const [quantidade, setQuantidade] = useState(1)
+  const [observacaoItem, setObservacaoItem] = useState('')
+  const [gruposAdicionais, setGruposAdicionais] = useState([])
+  const [adicionais, setAdicionais] = useState([])
+  const [produtoGrupos, setProdutoGrupos] = useState([])
+  const [escolhasAdicionais, setEscolhasAdicionais] = useState({})
   const [carrinho, setCarrinho] = useState([])
   const [carrinhoAberto, setCarrinhoAberto] = useState(false)
   const [checkoutAberto, setCheckoutAberto] = useState(false)
@@ -128,6 +134,17 @@ function Cardapio() {
         setLoja(estabelecimento)
         setCategorias(dadosCategorias || [])
         setProdutos(dadosProdutos || [])
+        const [{ data: grupos }, { data: ops }] = await Promise.all([
+          supabase.from('grupos_adicionais').select('*').eq('estabelecimento_id', estabelecimento.id).eq('ativo', true).order('ordem'),
+          supabase.from('adicionais').select('*').eq('estabelecimento_id', estabelecimento.id).eq('disponivel', true).order('ordem'),
+        ])
+        const idsProdutos = (dadosProdutos || []).map((p) => p.id)
+        const { data: vinculos } = idsProdutos.length
+          ? await supabase.from('produto_grupos_adicionais').select('*').in('produto_id', idsProdutos)
+          : { data: [] }
+        setGruposAdicionais(grupos || [])
+        setAdicionais(ops || [])
+        setProdutoGrupos(vinculos || [])
       }
 
       setCarregando(false)
@@ -144,34 +161,121 @@ function Cardapio() {
     )
   }, [busca, produtos])
 
+
+  const produtosDestaque = useMemo(
+    () => produtos
+      .filter((produto) => produto.destaque)
+      .slice(0, 6),
+    [produtos],
+  )
+
+
+  function iconeCategoria(nome = '') {
+    const inicial = String(nome || '').trim().charAt(0).toUpperCase() || '•'
+    return <span className="categoria-led__letra">{inicial}</span>
+  }
+
   const totalItens = carrinho.reduce((soma, item) => soma + item.quantidade, 0)
   const total = carrinho.reduce((soma, item) => soma + item.preco * item.quantidade, 0)
 
   function abrirProduto(produto) {
     setProdutoAberto(produto)
     setQuantidade(1)
+    setObservacaoItem('')
+    setEscolhasAdicionais({})
+  }
+
+  const gruposDoProduto = produtoAberto
+    ? gruposAdicionais.filter((grupo) => produtoGrupos.some((v) => v.produto_id === produtoAberto.id && v.grupo_id === grupo.id))
+    : []
+
+  function adicionaisDoGrupo(grupoId) { return adicionais.filter((a) => a.grupo_id === grupoId) }
+
+  function alternarAdicional(grupo, adicional) {
+    setEscolhasAdicionais((atual) => {
+      const atuais = atual[grupo.id] || []
+      if (atuais.includes(adicional.id)) return { ...atual, [grupo.id]: atuais.filter((id) => id !== adicional.id) }
+      const maximo = Number(grupo.maximo || 0)
+      if (maximo === 1) return { ...atual, [grupo.id]: [adicional.id] }
+      if (maximo > 0 && atuais.length >= maximo) return atual
+      return { ...atual, [grupo.id]: [...atuais, adicional.id] }
+    })
+  }
+
+  const adicionaisSelecionados = gruposDoProduto.flatMap((grupo) => {
+    const ids = escolhasAdicionais[grupo.id] || []
+    return adicionaisDoGrupo(grupo.id).filter((a) => ids.includes(a.id))
+  })
+  const totalAdicionaisUnitario = adicionaisSelecionados.reduce((soma, a) => soma + Number(a.preco || 0), 0)
+  const precoBaseProduto = produtoAberto ? Number(produtoAberto.preco_promocional || produtoAberto.preco || 0) : 0
+  const precoUnitarioConfigurado = precoBaseProduto + totalAdicionaisUnitario
+  const categoriaProdutoAberto = produtoAberto
+    ? categorias.find((categoria) => categoria.id === produtoAberto.categoria_id)
+    : null
+
+  const nomeCategoriaProduto = String(categoriaProdutoAberto?.nome || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+
+  const produtoEhBebida = ['bebida', 'bebidas'].includes(nomeCategoriaProduto)
+
+  const produtoEhDoce = [
+    'doce', 'doces', 'sobremesa', 'sobremesas', 'acai', 'sorvetes', 'sorvete'
+  ].some((termo) => nomeCategoriaProduto.includes(termo))
+
+  const produtoEhRefeicao = [
+    'almoco', 'almocos', 'refeicao', 'refeicoes', 'prato', 'pratos',
+    'marmita', 'marmitas', 'frango assado', 'frango'
+  ].some((termo) => nomeCategoriaProduto.includes(termo))
+
+  const observacaoTituloProduto = produtoEhDoce
+    ? 'Observação especial'
+    : produtoEhRefeicao
+      ? 'Alguma observação do prato?'
+      : 'Alguma observação?'
+
+  const observacaoExemploProduto = produtoEhDoce
+    ? 'Ex.: sem cobertura, embalar separado'
+    : produtoEhRefeicao
+      ? 'Ex.: sem cebola, pouco sal, molho separado'
+      : 'Ex.: sem cebola, molho separado, cortar ao meio'
+
+  const observacaoPlaceholderProduto = produtoEhDoce
+    ? 'Ex.: sem cobertura, embalar separado...'
+    : produtoEhRefeicao
+      ? 'Ex.: sem cebola, pouco sal, molho separado...'
+      : 'Digite aqui como você quer este item...'
+
+  function adicionaisValidos() {
+    return gruposDoProduto.every((grupo) => {
+      const qtd = (escolhasAdicionais[grupo.id] || []).length
+      const minimo = grupo.obrigatorio ? Math.max(Number(grupo.minimo || 0), 1) : Number(grupo.minimo || 0)
+      return qtd >= minimo && !(grupo.maximo != null && Number(grupo.maximo) > 0 && qtd > Number(grupo.maximo))
+    })
   }
 
   function adicionarAoCarrinho() {
+    if (!adicionaisValidos()) { setErroPedido('Confira as opções obrigatórias deste produto.'); return }
+    const observacaoLimpa = observacaoItem.trim()
+    const idsSelecionados = adicionaisSelecionados.map((a) => a.id).sort()
+    const chaveItem = `${produtoAberto.id}::${idsSelecionados.join(',')}::${observacaoLimpa.toLowerCase()}`
     setCarrinho((atual) => {
-      const existente = atual.find((item) => item.id === produtoAberto.id)
-      if (existente) {
-        return atual.map((item) =>
-          item.id === produtoAberto.id
-            ? { ...item, quantidade: item.quantidade + quantidade }
-            : item,
-        )
-      }
-      return [...atual, { ...produtoAberto, quantidade, preco: Number(produtoAberto.preco_promocional || produtoAberto.preco) }]
+      const existente = atual.find((item) => item.chaveItem === chaveItem)
+      if (existente) return atual.map((item) => item.chaveItem === chaveItem ? { ...item, quantidade: item.quantidade + quantidade } : item)
+      return [...atual, { ...produtoAberto, chaveItem, observacaoItem: observacaoLimpa, quantidade, precoBase: precoBaseProduto, preco: precoUnitarioConfigurado, adicionaisEscolhidos: adicionaisSelecionados.map((a) => ({ id: a.id, nome: a.nome, preco: Number(a.preco || 0), grupo_id: a.grupo_id })) }]
     })
     setProdutoAberto(null)
+    setObservacaoItem('')
+    setEscolhasAdicionais({})
   }
 
-  function alterarItem(id, diferenca) {
+  function alterarItem(chaveItem, diferenca) {
     setCarrinho((atual) =>
       atual
         .map((item) =>
-          item.id === id ? { ...item, quantidade: item.quantidade + diferenca } : item,
+          item.chaveItem === chaveItem ? { ...item, quantidade: item.quantidade + diferenca } : item,
         )
         .filter((item) => item.quantidade > 0),
     )
@@ -291,8 +395,11 @@ function Cardapio() {
         referencia: formulario.referencia,
         forma_pagamento: formulario.pagamento,
         troco_para: formulario.troco,
-        observacao: formulario.observacao,
-        itens: carrinho.map((item) => ({ produto_id: item.id, quantidade: item.quantidade })),
+        observacao: carrinho
+          .filter((item) => item.observacaoItem)
+          .map((item) => `${item.quantidade}x ${item.nome}: ${item.observacaoItem}`)
+          .join(' | '),
+        itens: carrinho.map((item) => ({ produto_id: item.id, quantidade: item.quantidade, observacao: item.observacaoItem || '', adicionais: (item.adicionaisEscolhidos || []).map((a) => ({ id: a.id })) })),
       },
     })
     setEnviando(false)
@@ -311,42 +418,2050 @@ function Cardapio() {
 
   return (
     <div
-      className={`app ${loja.fundo_gif_url ? 'com-gif' : ''}`}
+      className={`app modelo-${loja.modelo_visual || 'kodvexa'}`}
       style={{
-        '--cor-loja': loja.cor_principal || '#0b5cff',
-        '--fundo-gif': loja.fundo_gif_url ? `url("${loja.fundo_gif_url}")` : 'none',
+        '--cor-loja': loja.cor_principal || '#3109d3',
       }}
     >
-      <header className={`hero ${loja.capa_url ? 'com-capa' : ''}`} style={loja.capa_url ? { backgroundImage: `url("${loja.capa_url}")` } : undefined}>
-        <div className="hero__overlay" />
-        <div className="hero__content limite">
-          <div className="logo-loja">
-            {loja.logo_url ? <img src={loja.logo_url} alt={loja.nome} /> : <Store size={34} />}
-          </div>
-          <div>
-            <span className={`status ${loja.aberto ? 'aberto' : 'fechado'}`}>
-              {loja.aberto ? 'Aberto agora' : 'Fechado'}
-            </span>
-            <h1>{loja.nome}</h1>
-            <p>{loja.descricao}</p>
-            <small>Entrega em aproximadamente {loja.tempo_medio_min} min</small>
-          </div>
-        </div>
-      </header>
+      <header
+        className={`hero ${(loja.capa_url || loja.fundo_gif_url) ? 'com-capa' : ''}`}
+        style={(loja.capa_url || loja.fundo_gif_url)
+          ? { backgroundImage: `url("${loja.capa_url || loja.fundo_gif_url}")` }
+          : undefined}
+      >
+        <div className="hero__overlay" />      </header>
 
       <main className="limite conteudo">
+        <style>{`
+          .categorias-filtro {
+            display: flex;
+            gap: 9px;
+            overflow-x: auto;
+            padding: 2px 0 6px;
+            scrollbar-width: none;
+          }
+
+          .categorias-filtro::-webkit-scrollbar {
+            display: none;
+          }
+
+          .loja-mobile-nav {
+            display: none;
+          }
+
+
+          .hero {
+            position: relative;
+            overflow: hidden;
+          }
+
+          .hero__overlay {
+            background:
+              linear-gradient(180deg, rgba(7,12,20,.00) 38%, rgba(7,12,20,.10) 66%, rgba(7,12,20,.48) 100%) !important;
+          }
+
+          .loja-identidade {
+            display: grid;
+            grid-template-columns: 58px minmax(0,1fr);
+            gap: 12px;
+            align-items: center;
+            margin: 0 0 12px;
+            padding: 12px 14px;
+            border: 1px solid #e1e7ef;
+            border-radius: 18px;
+            background: rgba(255,255,255,.98);
+            box-shadow: 0 10px 24px rgba(20,34,51,.07);
+          }
+
+          .loja-identidade__logo {
+            width: 58px;
+            height: 58px;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            border: 1px solid #e5eaf0;
+            border-radius: 16px;
+            background: #0b1420;
+          }
+
+          .loja-identidade__logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+          }
+
+          .loja-identidade__texto {
+            min-width: 0;
+          }
+
+          .loja-identidade__texto > span {
+            display: block;
+            margin-bottom: 3px;
+            color: #8b98a9;
+            font-size: .58rem;
+            font-weight: 900;
+            letter-spacing: .10em;
+            text-transform: uppercase;
+          }
+
+          .loja-identidade__texto h1 {
+            margin: 0 0 7px;
+            overflow: hidden;
+            color: #152033;
+            font-size: 1.08rem;
+            line-height: 1.1;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .loja-identidade__meta {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            flex-wrap: wrap;
+          }
+
+          .loja-identidade__meta span {
+            min-height: 25px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 0 8px;
+            border-radius: 999px;
+            background: #f3f6f9;
+            color: #6a788b;
+            font-size: .65rem;
+            font-weight: 800;
+          }
+
+          .loja-identidade__meta span.aberto {
+            background: #eefbf3;
+            color: #15803d;
+          }
+
+          .loja-identidade__meta span.fechado {
+            background: #fff0f1;
+            color: #c24145;
+          }
+
+          .loja-identidade__meta i {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+          }
+
+          .categorias-clean {
+            gap: 8px !important;
+          }
+
+          .categorias-clean button {
+            min-height: 38px !important;
+            padding: 0 15px !important;
+            border: 1px solid #dce4ee !important;
+            border-radius: 999px !important;
+            background: rgba(255,255,255,.97) !important;
+            color: #1b2638 !important;
+            box-shadow: 0 4px 12px rgba(20,34,51,.05) !important;
+          }
+
+          .categorias-clean button::before,
+          .categorias-clean button::after {
+            display: none !important;
+          }
+
+          .categorias-clean button.ativo {
+            border-color: color-mix(in srgb, var(--cor-loja) 44%, #dce4ee) !important;
+            background: color-mix(in srgb, var(--cor-loja) 9%, #fff) !important;
+            color: var(--cor-loja) !important;
+            box-shadow: 0 6px 14px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;
+          }
+
+
+          @property --led-angle {
+            syntax: '<angle>';
+            initial-value: 0deg;
+            inherits: false;
+          }
+
+          .vitrine-destaques {
+            position: relative;
+            margin: 12px 0 26px;
+            padding: 15px 14px 14px;
+            border: 1px solid rgba(225,231,239,.95);
+            border-radius: 22px;
+            background:
+              radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--cor-loja) 9%, transparent), transparent 38%),
+              linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,253,.96));
+            box-shadow: 0 12px 30px rgba(20,34,51,.07);
+            overflow: hidden;
+          }
+
+          .vitrine-destaques::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            border-radius: inherit;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+          }
+
+          .vitrine-destaques__topo {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 13px;
+          }
+
+          .vitrine-destaques__selo {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 27px;
+            padding: 0 10px;
+            border: 1px solid color-mix(in srgb, var(--cor-loja) 20%, #dfe6ef);
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--cor-loja) 8%, #fff);
+            color: var(--cor-loja);
+            font-size: .68rem;
+            font-weight: 900;
+            letter-spacing: .02em;
+          }
+
+          .vitrine-destaques h2 {
+            margin: 7px 0 3px;
+            color: #111827;
+            font-size: 1.22rem;
+            line-height: 1.15;
+            letter-spacing: -.02em;
+          }
+
+          .vitrine-destaques p {
+            margin: 0;
+            color: #7d899b;
+            font-size: .79rem;
+          }
+
+          .vitrine-destaques__lista {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(220px, 260px);
+            gap: 13px;
+            overflow-x: auto;
+            padding: 2px 2px 9px;
+            scroll-snap-type: x proximity;
+            scrollbar-width: none;
+          }
+
+          .vitrine-destaques__lista::-webkit-scrollbar {
+            display: none;
+          }
+
+          .vitrine-destaques__card {
+            --led-angle: 0deg;
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            display: grid;
+            grid-template-rows: 134px auto;
+            min-width: 0;
+            padding: 2px;
+            border: 0;
+            border-radius: 20px;
+            background:
+              conic-gradient(
+                from var(--led-angle),
+                transparent 0deg 250deg,
+                color-mix(in srgb, var(--cor-loja) 80%, #7c3aed) 280deg,
+                #8fb8ff 305deg,
+                transparent 335deg 360deg
+              );
+            box-shadow:
+              0 12px 28px rgba(20,34,51,.09),
+              0 0 0 1px rgba(215,224,235,.65);
+            text-align: left;
+            scroll-snap-align: start;
+            cursor: pointer;
+            animation: ledCardRound 4.2s linear infinite;
+          }
+
+          .vitrine-destaques__card::before {
+            content: '';
+            position: absolute;
+            z-index: -1;
+            inset: 2px;
+            border-radius: 18px;
+            background: #fff;
+          }
+
+          .vitrine-destaques__card::after {
+            content: '';
+            position: absolute;
+            z-index: 3;
+            inset: 0;
+            pointer-events: none;
+            border-radius: inherit;
+            box-shadow:
+              inset 0 0 0 1px rgba(255,255,255,.5),
+              0 0 18px color-mix(in srgb, var(--cor-loja) 10%, transparent);
+          }
+
+          @keyframes ledCardRound {
+            to { --led-angle: 360deg; }
+          }
+
+          .vitrine-destaques__imagem {
+            position: relative;
+            overflow: hidden;
+            display: grid;
+            place-items: center;
+            margin: 2px 2px 0;
+            border-radius: 16px 16px 10px 10px;
+            background: #f4f6f9;
+          }
+
+          .vitrine-destaques__imagem img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform .28s ease;
+          }
+
+          .vitrine-destaques__card:active .vitrine-destaques__imagem img {
+            transform: scale(1.025);
+          }
+
+          .vitrine-destaques__badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            min-height: 25px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 9px;
+            border: 1px solid rgba(255,255,255,.45);
+            border-radius: 999px;
+            background: rgba(19,31,49,.88);
+            color: #fff;
+            font-size: .6rem;
+            font-weight: 950;
+            letter-spacing: .07em;
+            box-shadow: 0 7px 18px rgba(10,19,31,.18);
+            backdrop-filter: blur(8px);
+          }
+
+          .vitrine-destaques__conteudo {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            gap: 5px;
+            margin: 0 2px 2px;
+            padding: 12px 13px 13px;
+            border-radius: 10px 10px 16px 16px;
+            background: #fff;
+          }
+
+          .vitrine-destaques__conteudo > strong {
+            overflow: hidden;
+            color: #131d2e;
+            font-size: .94rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .vitrine-destaques__conteudo > small {
+            min-height: 34px;
+            display: -webkit-box;
+            overflow: hidden;
+            color: #7c8ba0;
+            font-size: .72rem;
+            line-height: 1.35;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+          }
+
+          .vitrine-destaques__precos {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-top: 4px;
+          }
+
+          .vitrine-destaques__precos del {
+            color: #9aa6b7;
+            font-size: .69rem;
+          }
+
+          .vitrine-destaques__precos b {
+            color: var(--cor-loja);
+            font-size: .96rem;
+            font-weight: 900;
+          }
+
+          .loja-mobile-nav.oculto-modal {
+            display: none !important;
+          }
+
+          .categorias-filtro button {
+            flex: 0 0 auto;
+            min-height: 40px;
+            padding: 0 16px;
+            border: 1px solid #dbe3ee;
+            border-radius: 999px;
+            background: #fff;
+            color: #192235;
+            font: inherit;
+            font-size: .88rem;
+            font-weight: 800;
+            cursor: pointer;
+            transition: .18s ease;
+          }
+
+          .categorias-filtro button.ativo {
+            border-color: var(--cor-loja);
+            background: var(--cor-loja);
+            color: #fff;
+            box-shadow: 0 7px 18px color-mix(in srgb, var(--cor-loja) 24%, transparent);
+          }
+
+
+          .categorias-led {
+            gap: 10px;
+          }
+
+          .categorias-led button {
+            position: relative;
+            isolation: isolate;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            overflow: hidden;
+          }
+
+          .categorias-led button::before {
+            content: '';
+            position: absolute;
+            z-index: -2;
+            inset: -1px;
+            border-radius: inherit;
+            background:
+              linear-gradient(
+                110deg,
+                transparent 0 22%,
+                color-mix(in srgb, var(--cor-loja) 55%, #7c3aed) 32%,
+                transparent 42% 100%
+              );
+            background-size: 220% 100%;
+            background-position: 140% 0;
+            opacity: 0;
+            transition: opacity .18s ease;
+          }
+
+          .categorias-led button::after {
+            content: '';
+            position: absolute;
+            z-index: -1;
+            inset: 1px;
+            border-radius: inherit;
+            background: rgba(255,255,255,.98);
+          }
+
+          .categorias-led button.ativo::before {
+            opacity: 1;
+            animation: categoriaLedMove 3.2s linear infinite;
+          }
+
+          .categorias-led button.ativo::after {
+            background:
+              linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--cor-loja) 88%, #2f2bff),
+                color-mix(in srgb, var(--cor-loja) 70%, #7c3aed)
+              );
+          }
+
+          .categorias-led button.ativo {
+            border-color: transparent !important;
+            background: transparent !important;
+            color: #fff !important;
+            box-shadow:
+              0 8px 18px color-mix(in srgb, var(--cor-loja) 22%, transparent),
+              0 0 0 1px color-mix(in srgb, var(--cor-loja) 14%, transparent) !important;
+          }
+
+          .categoria-led__icone {
+            width: 25px;
+            height: 25px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 25px;
+            border-radius: 9px;
+            background: #f4f7fb;
+            color: #50637b;
+          }
+
+          .categorias-led button.ativo .categoria-led__icone {
+            background: rgba(255,255,255,.14);
+            color: #fff;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);
+          }
+
+          .categoria-led__letra {
+            font-size: .72rem;
+            line-height: 1;
+            font-weight: 950;
+            letter-spacing: .01em;
+          }
+
+          @keyframes categoriaLedMove {
+            from { background-position: 140% 0; }
+            to { background-position: -120% 0; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .categorias-led button.ativo::before {
+              animation: none !important;
+            }
+          }
+
+          @media (max-width: 600px) {
+            .conteudo {
+              padding-top: 0 !important;
+            }
+
+            .hero {
+              min-height: 215px !important;
+              max-height: 215px !important;
+              margin-bottom: 42px !important;
+            }
+
+            .hero-store-card {
+              right: 10px !important;
+              bottom: -36px !important;
+              left: 10px !important;
+              min-height: 74px !important;
+              padding: 10px 12px !important;
+              border-radius: 17px !important;
+            }
+
+            .hero-store-card__logo {
+              width: 50px !important;
+              height: 50px !important;
+              flex-basis: 50px !important;
+            }
+
+            .hero-store-card__texto h1 {
+              font-size: 1rem !important;
+            }
+
+            .hero-clean__status,
+            .hero-clean__tempo {
+              min-height: 25px !important;
+              padding: 0 8px !important;
+              font-size: .65rem !important;
+            }
+
+            .modal-produto .modal-produto__midia {
+              max-height: 260px !important;
+            }
+
+            .modal-produto .modal-produto__midia img {
+              object-fit: contain !important;
+              background: #fff !important;
+            }
+
+            .modal-produto {
+              max-height: 92dvh !important;
+              display: flex !important;
+              flex-direction: column !important;
+              overflow: hidden !important;
+              padding-bottom: 0 !important;
+            }
+
+            .modal-produto__midia {
+              flex: 0 0 auto !important;
+            }
+
+            .modal-produto__conteudo {
+              flex: 1 1 auto !important;
+              min-height: 0 !important;
+              overflow-y: auto !important;
+              padding-bottom: 0 !important;
+              overscroll-behavior: contain;
+            }
+
+            .modal-produto__rodape {
+              position: sticky !important;
+              z-index: 30 !important;
+              bottom: 0 !important;
+              display: grid !important;
+              grid-template-columns: 108px minmax(0, 1fr) !important;
+              gap: 8px !important;
+              margin: 18px -16px 0 !important;
+              padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) !important;
+              border-top: 1px solid #e7ebf2 !important;
+              background: rgba(255,255,255,.99) !important;
+              box-shadow: 0 -8px 22px rgba(20,34,51,.08) !important;
+              backdrop-filter: blur(12px);
+            }
+
+            .adicionar-produto {
+              min-height: 52px !important;
+              border-radius: 14px !important;
+            }
+
+            .quantidade-produto {
+              min-height: 52px !important;
+              border-radius: 14px !important;
+            }
+
+            .busca {
+              position: relative;
+              z-index: 5;
+              margin-top: 0 !important;
+              margin-bottom: 12px !important;
+              min-height: 52px !important;
+              border: 1px solid rgba(205,214,226,.82) !important;
+              border-radius: 16px !important;
+              background: rgba(255,255,255,.96) !important;
+              box-shadow: 0 10px 30px rgba(24,35,52,.12) !important;
+              backdrop-filter: blur(12px);
+            }
+
+            .busca input {
+              font-size: .93rem !important;
+            }
+
+            .categorias-filtro {
+              margin: 0 -6px 24px !important;
+              padding: 4px 6px 8px !important;
+              gap: 8px !important;
+              overflow-x: auto;
+              scroll-snap-type: x proximity;
+            }
+
+            .categorias-filtro button {
+              min-height: 46px;
+              padding: 0 13px 0 10px;
+              border-color: #d7dfeb !important;
+              background: rgba(255,255,255,.94) !important;
+              color: #182235 !important;
+              font-size: .8rem;
+              font-weight: 850;
+              box-shadow: 0 5px 14px rgba(17,31,48,.06);
+              scroll-snap-align: start;
+            }
+
+            .categorias-filtro button.ativo {
+              border-color: var(--cor-loja) !important;
+              background: linear-gradient(135deg, var(--cor-loja), color-mix(in srgb, var(--cor-loja) 78%, #7b3cff)) !important;
+              color: #fff !important;
+              box-shadow: 0 8px 18px color-mix(in srgb, var(--cor-loja) 24%, transparent) !important;
+              transform: translateY(-1px);
+            }
+
+            .secao {
+              margin-top: 0 !important;
+              padding-top: 0 !important;
+            }
+
+            .secao__titulo {
+              margin-bottom: 14px !important;
+              padding: 0 2px !important;
+              align-items: flex-end !important;
+            }
+
+            .secao__titulo h2 {
+              margin: 0 !important;
+              color: #121a2a !important;
+              font-size: 1.28rem !important;
+              line-height: 1.1 !important;
+            }
+
+            .secao__titulo p {
+              margin-top: 5px !important;
+              color: #7b8aa2 !important;
+              font-size: .82rem !important;
+            }
+
+            .secao__titulo > span {
+              display: none !important;
+            }
+
+            .produtos {
+              display: grid !important;
+              gap: 12px !important;
+            }
+
+            .produto {
+              min-height: 126px !important;
+              grid-template-columns: minmax(0,1fr) 104px !important;
+              gap: 12px !important;
+              padding: 14px !important;
+              border: 1px solid #e1e7ef !important;
+              border-radius: 20px !important;
+              background:
+                linear-gradient(145deg, rgba(255,255,255,.99), rgba(248,250,253,.98)) !important;
+              box-shadow:
+                0 8px 20px rgba(20,34,51,.07),
+                inset 0 1px 0 rgba(255,255,255,.9) !important;
+              overflow: hidden;
+            }
+
+            .produto:active {
+              transform: scale(.992);
+            }
+
+            .produto__texto {
+              align-self: stretch !important;
+              display: flex !important;
+              flex-direction: column !important;
+              min-width: 0;
+            }
+
+            .produto__texto .destaque {
+              width: max-content;
+              margin-bottom: 7px !important;
+              padding: 4px 8px !important;
+              border-radius: 999px !important;
+              background: color-mix(in srgb, var(--cor-loja) 10%, #fff) !important;
+              color: var(--cor-loja) !important;
+              font-size: .62rem !important;
+              letter-spacing: .05em;
+            }
+
+            .produto__texto h3 {
+              margin: 0 0 5px !important;
+              color: #111a2a !important;
+              font-size: .98rem !important;
+              line-height: 1.15 !important;
+            }
+
+            .produto__texto p {
+              display: -webkit-box !important;
+              margin: 0 0 8px !important;
+              overflow: hidden !important;
+              color: #7d8ba1 !important;
+              font-size: .78rem !important;
+              line-height: 1.35 !important;
+              -webkit-box-orient: vertical;
+              -webkit-line-clamp: 2;
+            }
+
+            .produto__texto b {
+              margin-top: auto !important;
+              color: #111a2a !important;
+              font-size: .92rem !important;
+            }
+
+            .produto__imagem {
+              width: 104px !important;
+              height: 98px !important;
+              align-self: center !important;
+              border: 1px solid #eef1f5 !important;
+              border-radius: 16px !important;
+              background: #f8fafc !important;
+              box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+              overflow: hidden;
+            }
+
+            .produto__imagem img {
+              width: 100% !important;
+              height: 100% !important;
+              object-fit: cover !important;
+            }
+
+            .produto__seta {
+              right: 8px !important;
+              bottom: 8px !important;
+              width: 17px !important;
+              color: #9ba9ba !important;
+            }
+
+            .barra-carrinho {
+              right: 12px !important;
+              bottom: 12px !important;
+              left: 12px !important;
+              width: auto !important;
+              min-height: 58px !important;
+              border-radius: 18px !important;
+              box-shadow: 0 16px 35px color-mix(in srgb, var(--cor-loja) 28%, rgba(0,0,0,.22)) !important;
+            }
+
+            .barra-carrinho .bolha {
+              width: 34px !important;
+              height: 34px !important;
+              border-radius: 10px !important;
+              background: rgba(255,255,255,.16) !important;
+            }
+
+
+            .conteudo {
+              padding-bottom: 98px !important;
+            }
+
+
+            .vitrine-destaques {
+              margin: 0 -2px 24px !important;
+              padding: 14px 10px 12px !important;
+              border-radius: 20px !important;
+            }
+
+            .vitrine-destaques__topo {
+              margin-bottom: 11px !important;
+            }
+
+            .vitrine-destaques h2 {
+              font-size: 1.17rem !important;
+            }
+
+            .vitrine-destaques__lista {
+              grid-auto-columns: minmax(205px, 74vw) !important;
+              margin-right: -12px;
+              padding-right: 12px;
+            }
+
+            .vitrine-destaques__card {
+              grid-template-rows: 128px auto !important;
+              border-radius: 18px !important;
+            }
+
+            .secao + .secao {
+              margin-top: 22px !important;
+            }
+
+            .secao {
+              position: relative;
+              margin-right: -10px !important;
+              margin-left: -10px !important;
+              padding: 16px 10px 18px !important;
+              border-top: 1px solid #e4eaf1 !important;
+              border-bottom: 1px solid #e4eaf1 !important;
+              background:
+                linear-gradient(180deg, rgba(244,247,251,.98), rgba(239,244,249,.92)) !important;
+            }
+
+            .secao:first-of-type {
+              border-top: 0 !important;
+              border-radius: 18px 18px 0 0;
+            }
+
+            .secao__titulo {
+              position: relative;
+              margin-bottom: 13px !important;
+              padding: 0 2px 0 10px !important;
+            }
+
+            .secao__titulo::before {
+              content: '';
+              position: absolute;
+              top: 1px;
+              bottom: 1px;
+              left: 0;
+              width: 4px;
+              border-radius: 999px;
+              background: var(--cor-loja);
+            }
+
+            .secao__titulo h2 {
+              font-size: 1.18rem !important;
+              letter-spacing: -.02em;
+            }
+
+            .secao__titulo p {
+              margin-top: 4px !important;
+            }
+
+            .produto {
+              border: 1px solid rgba(217,225,235,.96) !important;
+              border-radius: 18px !important;
+              background: rgba(255,255,255,.98) !important;
+              box-shadow: 0 7px 18px rgba(20,34,51,.065) !important;
+            }
+
+            .produto__imagem {
+              border-radius: 17px !important;
+            }
+
+            .loja-mobile-nav {
+              position: fixed;
+              z-index: 90;
+              right: 8px;
+              bottom: 8px;
+              left: 8px;
+              display: grid;
+              grid-template-columns: repeat(4, 1fr);
+              min-height: 66px;
+              padding: 6px 5px max(6px, env(safe-area-inset-bottom));
+              border: 1px solid rgba(216,224,234,.96);
+              border-radius: 21px;
+              background: rgba(255,255,255,.97);
+              box-shadow: 0 16px 42px rgba(20,34,51,.20);
+              backdrop-filter: blur(16px);
+            }
+
+            .loja-mobile-nav button {
+              position: relative;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              gap: 4px;
+              min-width: 0;
+              border: 0;
+              border-radius: 15px;
+              background: transparent;
+              color: #7a8798;
+              font: inherit;
+            }
+
+            .loja-mobile-nav button span {
+              font-size: .66rem;
+              font-weight: 800;
+            }
+
+            .loja-mobile-nav button.ativo,
+            .loja-mobile-nav button.tem-itens {
+              color: var(--cor-loja);
+            }
+
+            .loja-mobile-nav button.ativo {
+              background: color-mix(in srgb, var(--cor-loja) 9%, #fff);
+            }
+
+            .loja-mobile-nav button b {
+              position: absolute;
+              top: 3px;
+              left: calc(50% + 7px);
+              display: grid;
+              place-items: center;
+              min-width: 18px;
+              height: 18px;
+              padding: 0 4px;
+              border: 2px solid #fff;
+              border-radius: 999px;
+              background: var(--cor-loja);
+              color: #fff;
+              font-size: .58rem;
+            }
+
+            .barra-carrinho {
+              display: none !important;
+            }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .vitrine-destaques__card {
+              animation: none !important;
+            }
+          }
+
+          .vitrine-destaques {
+            margin: 8px 0 26px !important;
+            padding: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            overflow: visible !important;
+          }
+
+          .vitrine-destaques::after {
+            display: none !important;
+          }
+
+          .vitrine-destaques__topo {
+            margin-bottom: 12px !important;
+            padding: 0 2px !important;
+          }
+
+          .vitrine-destaques__selo {
+            min-height: 24px !important;
+            padding: 0 9px !important;
+            border: 1px solid #e0e7f1 !important;
+            background: #f5f7fb !important;
+            color: #52647d !important;
+            box-shadow: none !important;
+          }
+
+          .vitrine-destaques h2 {
+            margin-top: 6px !important;
+            font-size: 1.17rem !important;
+          }
+
+          .vitrine-destaques p {
+            max-width: 320px;
+            font-size: .76rem !important;
+          }
+
+          .vitrine-destaques__lista {
+            grid-auto-columns: minmax(270px, 82vw) !important;
+            gap: 12px !important;
+            padding: 0 10px 8px 2px !important;
+          }
+
+          .vitrine-destaques__card {
+            grid-template-rows: 150px auto !important;
+            padding: 0 !important;
+            border: 1px solid #e1e7ef !important;
+            border-radius: 22px !important;
+            background: #fff !important;
+            box-shadow: 0 12px 26px rgba(20,34,51,.08) !important;
+            animation: none !important;
+          }
+
+          .vitrine-destaques__card::before,
+          .vitrine-destaques__card::after {
+            display: none !important;
+          }
+
+          .vitrine-destaques__imagem {
+            margin: 0 !important;
+            border-radius: 21px 21px 0 0 !important;
+          }
+
+          .vitrine-destaques__imagem::after {
+            content: '';
+            position: absolute;
+            inset: auto 0 0 0;
+            height: 42%;
+            pointer-events: none;
+            background: linear-gradient(180deg, transparent, rgba(9,16,27,.30));
+          }
+
+          .vitrine-destaques__badge {
+            top: 11px !important;
+            left: 11px !important;
+            min-height: 24px !important;
+            padding: 0 9px !important;
+            border: 0 !important;
+            background: rgba(10,18,29,.78) !important;
+            font-size: .58rem !important;
+            backdrop-filter: blur(10px);
+          }
+
+          .vitrine-destaques__conteudo {
+            margin: 0 !important;
+            padding: 12px 14px 14px !important;
+            border-radius: 0 0 21px 21px !important;
+          }
+
+          .vitrine-destaques__conteudo > strong {
+            font-size: .98rem !important;
+          }
+
+          .vitrine-destaques__conteudo > small {
+            min-height: 30px !important;
+            font-size: .71rem !important;
+          }
+
+          .vitrine-destaques__precos {
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 4px !important;
+          }
+
+          .vitrine-destaques__precos b {
+            font-size: 1rem !important;
+          }
+
+          .vitrine-destaques__precos::after {
+            content: '+';
+            width: 30px;
+            height: 30px;
+            display: grid;
+            place-items: center;
+            border-radius: 10px;
+            background: color-mix(in srgb, var(--cor-loja) 10%, #fff);
+            color: var(--cor-loja);
+            font-size: 1.1rem;
+            font-weight: 900;
+          }
+
+          .categorias-clean {
+            position: relative;
+            padding-bottom: 8px !important;
+          }
+
+          .categorias-clean::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #e7edf4 15%, #e7edf4 85%, transparent);
+          }
+
+          @media (max-width: 600px) {
+            .hero {
+              min-height: 215px !important;
+              max-height: 215px !important;
+              margin-bottom: 0 !important;
+            }
+
+            .hero-signature {
+              right: 12px !important;
+              bottom: 12px !important;
+              left: 12px !important;
+              grid-template-columns: 48px minmax(0,1fr) !important;
+              padding: 9px 10px !important;
+              border-radius: 16px !important;
+            }
+
+            .hero-signature__logo {
+              width: 48px !important;
+              height: 48px !important;
+            }
+
+            .hero-signature__texto h1 {
+              font-size: 1rem !important;
+            }
+
+            .hero-signature__meta {
+              font-size: .62rem !important;
+            }
+
+            .loja-identidade {
+              grid-template-columns: 52px minmax(0,1fr) !important;
+              margin: 10px 0 10px !important;
+              padding: 10px 11px !important;
+              border-radius: 16px !important;
+            }
+
+            .loja-identidade__logo {
+              width: 52px !important;
+              height: 52px !important;
+            }
+
+            .loja-identidade__texto h1 {
+              font-size: 1rem !important;
+            }
+
+            .busca {
+              margin-top: 0 !important;
+              margin-bottom: 12px !important;
+              border-radius: 15px !important;
+            }
+
+            .categorias-filtro {
+              margin-bottom: 22px !important;
+            }
+
+            .vitrine-destaques {
+              margin-top: 0 !important;
+            }
+          }
+
+          /* LED dos cards de destaque: mantém o layout atual e restaura a luz correndo na borda */
+          .vitrine-destaques__card {
+            --led-angle: 0deg;
+            padding: 2px !important;
+            border: 0 !important;
+            background:
+              conic-gradient(
+                from var(--led-angle),
+                transparent 0deg 238deg,
+                color-mix(in srgb, var(--cor-loja) 88%, #5b5cff) 270deg,
+                #a8c7ff 296deg,
+                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 314deg,
+                transparent 342deg 360deg
+              ) !important;
+            box-shadow:
+              0 12px 26px rgba(20,34,51,.08),
+              0 0 15px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;
+            animation: ledCardRound 3.8s linear infinite !important;
+          }
+
+          .vitrine-destaques__imagem {
+            margin: 0 !important;
+            border-radius: 20px 20px 0 0 !important;
+          }
+
+          .vitrine-destaques__conteudo {
+            margin: 0 !important;
+            border-radius: 0 0 20px 20px !important;
+            background: #fff !important;
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .vitrine-destaques__card {
+              animation: none !important;
+            }
+          }
+
+
+          /* RESTAURA APENAS O LED DAS CATEGORIAS */
+          .categorias-clean button {
+            position: relative !important;
+            isolation: isolate !important;
+            overflow: hidden !important;
+            border: 1px solid #dce4ee !important;
+            background: rgba(255,255,255,.97) !important;
+            color: #1b2638 !important;
+          }
+
+          .categorias-clean button::before {
+            content: '' !important;
+            display: block !important;
+            position: absolute !important;
+            z-index: -2 !important;
+            inset: -1px !important;
+            border-radius: inherit !important;
+            background:
+              conic-gradient(
+                from var(--cat-led-angle, 0deg),
+                transparent 0deg 245deg,
+                color-mix(in srgb, var(--cor-loja) 90%, #536dff) 272deg,
+                #a9c7ff 298deg,
+                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 318deg,
+                transparent 345deg 360deg
+              ) !important;
+            opacity: 0 !important;
+          }
+
+          .categorias-clean button::after {
+            content: '' !important;
+            display: block !important;
+            position: absolute !important;
+            z-index: -1 !important;
+            inset: 2px !important;
+            border-radius: calc(999px - 2px) !important;
+            background: rgba(255,255,255,.98) !important;
+          }
+
+          .categorias-clean button.ativo {
+            border-color: transparent !important;
+            background: transparent !important;
+            color: var(--cor-loja) !important;
+            box-shadow:
+              0 6px 14px color-mix(in srgb, var(--cor-loja) 12%, transparent),
+              0 0 12px color-mix(in srgb, var(--cor-loja) 8%, transparent) !important;
+          }
+
+          .categorias-clean button.ativo::before {
+            opacity: 1 !important;
+            animation: categoriaLedVolta 3.2s linear infinite !important;
+          }
+
+          .categorias-clean button.ativo::after {
+            background: color-mix(in srgb, var(--cor-loja) 7%, #fff) !important;
+          }
+
+          @keyframes categoriaLedVolta {
+            from { --cat-led-angle: 0deg; }
+            to { --cat-led-angle: 360deg; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .categorias-clean button.ativo::before {
+              animation: none !important;
+            }
+          }
+
+
+          /* CARD DE VIDRO DA LOJA: sobrepõe levemente o GIF sem esconder o fundo */
+          .loja-identidade {
+            position: relative !important;
+            z-index: 12 !important;
+            grid-template-columns: 58px minmax(0, 1fr) !important;
+            gap: 12px !important;
+            margin: -44px 10px 14px !important;
+            padding: 12px 14px !important;
+            border: 1px solid rgba(255,255,255,.28) !important;
+            border-radius: 20px !important;
+            background:
+              linear-gradient(
+                135deg,
+                rgba(31, 22, 22, .54),
+                rgba(43, 31, 30, .38)
+              ) !important;
+            box-shadow:
+              0 14px 34px rgba(20, 12, 12, .22),
+              inset 0 1px 0 rgba(255,255,255,.18) !important;
+            backdrop-filter: blur(13px) saturate(125%) !important;
+            -webkit-backdrop-filter: blur(13px) saturate(125%) !important;
+            overflow: hidden !important;
+          }
+
+          .loja-identidade::before {
+            content: '' !important;
+            position: absolute !important;
+            inset: 0 !important;
+            pointer-events: none !important;
+            border-radius: inherit !important;
+            background:
+              radial-gradient(circle at 18% 20%, rgba(255,255,255,.12), transparent 34%),
+              linear-gradient(115deg, rgba(255,255,255,.07), transparent 42%) !important;
+          }
+
+          .loja-identidade__logo,
+          .loja-identidade__texto {
+            position: relative !important;
+            z-index: 2 !important;
+          }
+
+          .loja-identidade__logo {
+            width: 58px !important;
+            height: 58px !important;
+            border: 1px solid rgba(255,255,255,.32) !important;
+            border-radius: 16px !important;
+            background: rgba(8,12,18,.62) !important;
+            box-shadow:
+              0 8px 18px rgba(0,0,0,.18),
+              0 0 0 3px rgba(255,255,255,.04) !important;
+          }
+
+          .loja-identidade__texto > span {
+            color: rgba(255,255,255,.66) !important;
+          }
+
+          .loja-identidade__texto h1 {
+            color: #fff !important;
+            text-shadow: 0 2px 10px rgba(0,0,0,.28) !important;
+          }
+
+          .loja-identidade__meta span {
+            border: 1px solid rgba(255,255,255,.14) !important;
+            background: rgba(255,255,255,.10) !important;
+            color: rgba(255,255,255,.88) !important;
+            backdrop-filter: blur(8px) !important;
+          }
+
+          .loja-identidade__meta span.aberto {
+            border-color: rgba(59, 220, 128, .20) !important;
+            background: rgba(20, 120, 62, .34) !important;
+            color: #d8ffe7 !important;
+          }
+
+          .loja-identidade__meta span.fechado {
+            border-color: rgba(255, 107, 107, .22) !important;
+            background: rgba(140, 38, 45, .34) !important;
+            color: #ffe1e3 !important;
+          }
+
+          @media (max-width: 600px) {
+            .loja-identidade {
+              grid-template-columns: 52px minmax(0,1fr) !important;
+              margin: -42px 8px 13px !important;
+              padding: 10px 11px !important;
+              border-radius: 18px !important;
+            }
+
+            .loja-identidade__logo {
+              width: 52px !important;
+              height: 52px !important;
+            }
+
+            .loja-identidade__texto h1 {
+              font-size: 1rem !important;
+            }
+
+            .loja-identidade__texto > span {
+              font-size: .54rem !important;
+            }
+
+            .loja-identidade__meta span {
+              min-height: 24px !important;
+              padding: 0 7px !important;
+              font-size: .63rem !important;
+            }
+
+            .busca {
+              margin-top: 0 !important;
+            }
+          }
+
+
+          /* VIDRO DE PONTA A PONTA */
+          .loja-identidade {
+            width: 100% !important;
+            max-width: none !important;
+            box-sizing: border-box !important;
+            margin: -44px 0 14px !important;
+            border-left: 0 !important;
+            border-right: 0 !important;
+            border-radius: 18px 18px 0 0 !important;
+          }
+
+          @media (max-width: 600px) {
+            .loja-identidade {
+              width: 100% !important;
+              margin: -42px 0 13px !important;
+              padding-left: 14px !important;
+              padding-right: 14px !important;
+              border-radius: 18px 18px 0 0 !important;
+            }
+          }
+
+
+          /* FORÇA O VIDRO A ENCOSTAR NAS DUAS BORDAS DO CARDÁPIO */
+          .loja-identidade {
+            width: calc(100% + 24px) !important;
+            max-width: none !important;
+            margin-left: -12px !important;
+            margin-right: -12px !important;
+            box-sizing: border-box !important;
+            border-left: 0 !important;
+            border-right: 0 !important;
+            border-radius: 0 0 18px 18px !important;
+          }
+
+          @media (max-width: 600px) {
+            .loja-identidade {
+              width: calc(100% + 24px) !important;
+              margin-left: -12px !important;
+              margin-right: -12px !important;
+              padding-left: 16px !important;
+              padding-right: 16px !important;
+              border-radius: 0 0 18px 18px !important;
+            }
+          }
+
+
+          /* MODELOS VISUAIS PRONTOS KODVEXA FOOD */
+
+          .app.modelo-vitrine .conteudo {
+            background:
+              linear-gradient(180deg, #fffaf5 0%, #f6efe8 100%) !important;
+          }
+
+          .app.modelo-vitrine .produto,
+          .app.modelo-vitrine .vitrine-destaques__card {
+            border-color: #efd9c8 !important;
+            border-radius: 22px !important;
+            box-shadow: 0 10px 24px rgba(92,50,22,.08) !important;
+          }
+
+          .app.modelo-vitrine .secao {
+            background:
+              linear-gradient(180deg, rgba(255,250,245,.98), rgba(247,239,232,.94)) !important;
+            border-color: #eadbce !important;
+          }
+
+          .app.modelo-vitrine .secao__titulo::before {
+            background: #d9611c !important;
+          }
+
+          .app.modelo-vitrine .categorias-clean button.ativo,
+          .app.modelo-vitrine .categorias-filtro button.ativo {
+            color: #b94813 !important;
+            border-color: #f0b18d !important;
+            background: #fff0e5 !important;
+          }
+
+          .app.modelo-vitrine .vitrine-destaques__precos b {
+            color: #c64e16 !important;
+          }
+
+          .app.modelo-glass .conteudo {
+            background:
+              radial-gradient(circle at 50% 0%, rgba(88,129,190,.12), transparent 34%),
+              linear-gradient(180deg, #eef4fb, #e8eff7) !important;
+          }
+
+          .app.modelo-glass .busca,
+          .app.modelo-glass .produto,
+          .app.modelo-glass .vitrine-destaques__card,
+          .app.modelo-glass .loja-identidade {
+            border-color: rgba(139,162,190,.34) !important;
+            background: rgba(255,255,255,.74) !important;
+            box-shadow:
+              0 10px 28px rgba(36,57,82,.09),
+              inset 0 1px 0 rgba(255,255,255,.75) !important;
+            backdrop-filter: blur(14px) saturate(120%) !important;
+            -webkit-backdrop-filter: blur(14px) saturate(120%) !important;
+          }
+
+          .app.modelo-glass .secao {
+            background:
+              linear-gradient(180deg, rgba(240,246,252,.74), rgba(231,239,248,.70)) !important;
+            border-color: rgba(137,160,188,.26) !important;
+          }
+
+          .app.modelo-glass .categorias-clean button,
+          .app.modelo-glass .categorias-filtro button {
+            border-color: rgba(139,162,190,.34) !important;
+            background: rgba(255,255,255,.68) !important;
+            backdrop-filter: blur(10px) !important;
+          }
+
+          .app.modelo-glass .categorias-clean button.ativo,
+          .app.modelo-glass .categorias-filtro button.ativo {
+            border-color: color-mix(in srgb, var(--cor-loja) 40%, #9db0c6) !important;
+            background: color-mix(in srgb, var(--cor-loja) 8%, rgba(255,255,255,.72)) !important;
+          }
+
+
+          /* ===== MODELOS FOOD REAIS ===== */
+
+          .app.modelo-burger-house .conteudo {
+            background:
+              radial-gradient(circle at 50% 0%, rgba(255,99,26,.08), transparent 24%),
+              linear-gradient(180deg, #17110e 0%, #21150f 100%) !important;
+          }
+
+          .app.modelo-burger-house .busca,
+          .app.modelo-burger-house .produto,
+          .app.modelo-burger-house .vitrine-destaques__card,
+          .app.modelo-burger-house .secao {
+            border-color: rgba(255,129,55,.17) !important;
+            background: #251813 !important;
+            color: #fff !important;
+            box-shadow: 0 10px 26px rgba(0,0,0,.16) !important;
+          }
+
+          .app.modelo-burger-house .produto__texto h3,
+          .app.modelo-burger-house .produto__texto b,
+          .app.modelo-burger-house .secao__titulo h2,
+          .app.modelo-burger-house .vitrine-destaques h2,
+          .app.modelo-burger-house .vitrine-destaques__conteudo > strong {
+            color: #fff5ee !important;
+          }
+
+          .app.modelo-burger-house .produto__texto p,
+          .app.modelo-burger-house .secao__titulo p,
+          .app.modelo-burger-house .vitrine-destaques p,
+          .app.modelo-burger-house .vitrine-destaques__conteudo > small {
+            color: #b99f91 !important;
+          }
+
+          .app.modelo-burger-house .categorias-filtro button {
+            border-color: rgba(255,129,55,.22) !important;
+            background: #291a14 !important;
+            color: #e8d3c8 !important;
+          }
+
+          .app.modelo-burger-house .categorias-filtro button.ativo {
+            border-color: #ff6a1a !important;
+            background: #ff6a1a !important;
+            color: #fff !important;
+            box-shadow: 0 8px 18px rgba(255,106,26,.23) !important;
+          }
+
+          .app.modelo-burger-house .vitrine-destaques__precos b,
+          .app.modelo-burger-house .secao__titulo::before {
+            color: #ff7a2a !important;
+            background: #ff7a2a !important;
+          }
+
+          .app.modelo-gourmet .conteudo {
+            background:
+              linear-gradient(180deg, #fbf7f1 0%, #f3ece3 100%) !important;
+          }
+
+          .app.modelo-gourmet .produto,
+          .app.modelo-gourmet .vitrine-destaques__card {
+            border-color: #e8dccd !important;
+            border-radius: 16px !important;
+            background: #fffdf9 !important;
+            box-shadow: 0 9px 22px rgba(76,58,38,.07) !important;
+          }
+
+          .app.modelo-gourmet .secao {
+            border-color: #eadfd2 !important;
+            background: rgba(250,246,239,.90) !important;
+          }
+
+          .app.modelo-gourmet .secao__titulo::before {
+            background: #8c6c49 !important;
+          }
+
+          .app.modelo-gourmet .categorias-filtro button {
+            background: #fffdf9 !important;
+            border-color: #e6dacb !important;
+          }
+
+          .app.modelo-gourmet .categorias-filtro button.ativo {
+            background: #8c6c49 !important;
+            border-color: #8c6c49 !important;
+            color: #fff !important;
+          }
+
+          .app.modelo-gourmet .vitrine-destaques__precos b {
+            color: #7a5c3d !important;
+          }
+
+          .app.modelo-fast-food .conteudo {
+            background:
+              radial-gradient(circle at 12% 0%, rgba(255,96,40,.10), transparent 22%),
+              linear-gradient(180deg, #fffaf5 0%, #fff2e7 100%) !important;
+          }
+
+          .app.modelo-fast-food .produto,
+          .app.modelo-fast-food .vitrine-destaques__card {
+            border-color: #ffe0ce !important;
+            border-radius: 24px !important;
+            background: #fff !important;
+            box-shadow: 0 10px 24px rgba(255,91,38,.09) !important;
+          }
+
+          .app.modelo-fast-food .secao {
+            background: rgba(255,248,242,.95) !important;
+            border-color: #f8ddd0 !important;
+          }
+
+          .app.modelo-fast-food .secao__titulo::before {
+            background: #ff5426 !important;
+          }
+
+          .app.modelo-fast-food .categorias-filtro button.ativo {
+            background: linear-gradient(135deg, #ff4928, #ff8a1d) !important;
+            border-color: transparent !important;
+            color: #fff !important;
+            box-shadow: 0 8px 18px rgba(255,80,35,.20) !important;
+          }
+
+          .app.modelo-fast-food .vitrine-destaques__precos b {
+            color: #ef421e !important;
+          }
+
+          .app.modelo-night-food .conteudo {
+            background:
+              radial-gradient(circle at 50% 0%, rgba(68,93,172,.16), transparent 28%),
+              linear-gradient(180deg, #0b1220 0%, #111a2b 100%) !important;
+          }
+
+          .app.modelo-night-food .busca,
+          .app.modelo-night-food .produto,
+          .app.modelo-night-food .vitrine-destaques__card,
+          .app.modelo-night-food .loja-identidade {
+            border-color: rgba(123,145,211,.20) !important;
+            background: rgba(19,29,49,.76) !important;
+            box-shadow:
+              0 12px 28px rgba(0,0,0,.20),
+              inset 0 1px 0 rgba(255,255,255,.05) !important;
+            backdrop-filter: blur(14px) !important;
+          }
+
+          .app.modelo-night-food .produto__texto h3,
+          .app.modelo-night-food .produto__texto b,
+          .app.modelo-night-food .secao__titulo h2,
+          .app.modelo-night-food .vitrine-destaques h2,
+          .app.modelo-night-food .vitrine-destaques__conteudo > strong {
+            color: #f4f7ff !important;
+          }
+
+          .app.modelo-night-food .produto__texto p,
+          .app.modelo-night-food .secao__titulo p,
+          .app.modelo-night-food .vitrine-destaques p,
+          .app.modelo-night-food .vitrine-destaques__conteudo > small {
+            color: #91a0bd !important;
+          }
+
+          .app.modelo-night-food .secao {
+            border-color: rgba(122,145,211,.15) !important;
+            background: rgba(14,23,39,.72) !important;
+          }
+
+          .app.modelo-night-food .categorias-filtro button {
+            border-color: rgba(123,145,211,.20) !important;
+            background: rgba(255,255,255,.07) !important;
+            color: #cbd5ea !important;
+          }
+
+          .app.modelo-night-food .categorias-filtro button.ativo {
+            border-color: #6672ff !important;
+            background: #5966f2 !important;
+            color: #fff !important;
+            box-shadow: 0 0 18px rgba(89,102,242,.24) !important;
+          }
+
+          .app.modelo-clean-food .conteudo {
+            background: #f6f8fb !important;
+          }
+
+          .app.modelo-clean-food .produto,
+          .app.modelo-clean-food .vitrine-destaques__card {
+            border-color: #e5eaf0 !important;
+            border-radius: 18px !important;
+            background: #fff !important;
+            box-shadow: none !important;
+          }
+
+          .app.modelo-clean-food .secao {
+            background: #f6f8fb !important;
+            border-color: #e8edf2 !important;
+          }
+
+          .app.modelo-clean-food .secao__titulo::before {
+            background: #94a3b8 !important;
+          }
+
+          .app.modelo-clean-food .categorias-filtro button {
+            box-shadow: none !important;
+          }
+
+          .app.modelo-clean-food .categorias-filtro button.ativo {
+            background: #111827 !important;
+            border-color: #111827 !important;
+            color: #fff !important;
+            box-shadow: none !important;
+          }
+
+
+
+          /* Marmitaria & Frango: visual quente e claro para almoço */
+          .app.modelo-marmitaria .conteudo {
+            background:
+              linear-gradient(180deg, #fff9f2 0%, #f7eee5 100%) !important;
+          }
+
+          .app.modelo-marmitaria .produto,
+          .app.modelo-marmitaria .vitrine-destaques__card {
+            border-color: #ead8c7 !important;
+            background: #fffdf9 !important;
+            border-radius: 18px !important;
+            box-shadow: 0 7px 20px rgba(105,54,29,.07) !important;
+          }
+
+          .app.modelo-marmitaria .categoria-titulo::before {
+            background: #b94d25 !important;
+          }
+
+          .app.modelo-marmitaria .categorias button.ativo {
+            background: #b94d25 !important;
+            color: #fff !important;
+            border-color: #b94d25 !important;
+          }
+
+          .app.modelo-marmitaria .vitrine-destaques {
+            background: linear-gradient(145deg, #fff7ed, #fffdf9) !important;
+            border-color: #ead8c7 !important;
+          }
+
+          /* Padrão oficial KODVEXA: mantém o layout principal aprovado */
+          .app.modelo-kodvexa .conteudo {
+            background:
+              linear-gradient(180deg, #f3f6fa 0%, #edf2f7 100%) !important;
+          }
+
+          .app.modelo-kodvexa .produto,
+          .app.modelo-kodvexa .vitrine-destaques__card {
+            border-color: #e1e7ef !important;
+            background: #fff !important;
+          }
+
+
+          .loja-identidade__descricao {
+            margin: 0 0 7px !important;
+            display: -webkit-box;
+            overflow: hidden;
+            color: rgba(255,255,255,.72) !important;
+            font-size: .68rem !important;
+            line-height: 1.35 !important;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+          }
+
+          @media (max-width: 600px) {
+            .loja-identidade__descricao {
+              margin-bottom: 6px !important;
+              font-size: .64rem !important;
+              -webkit-line-clamp: 1;
+            }
+          }
+
+
+          /* Card da loja em vidro, deixando o GIF/capa aparecer por trás */
+          .loja-identidade {
+            background:
+              linear-gradient(135deg,
+                rgba(15, 18, 24, .58),
+                rgba(28, 30, 36, .36)
+              ) !important;
+            border: 1px solid rgba(255,255,255,.18) !important;
+            box-shadow:
+              0 12px 28px rgba(0,0,0,.18),
+              inset 0 1px 0 rgba(255,255,255,.12) !important;
+            backdrop-filter: blur(13px) saturate(135%) !important;
+            -webkit-backdrop-filter: blur(13px) saturate(135%) !important;
+          }
+
+          .loja-identidade::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            border-radius: inherit;
+            background:
+              linear-gradient(180deg,
+                rgba(255,255,255,.10),
+                rgba(255,255,255,.015) 46%,
+                rgba(0,0,0,.06)
+              );
+          }
+
+          .loja-identidade > * {
+            position: relative;
+            z-index: 1;
+          }
+
+          .loja-identidade__texto > span,
+          .loja-identidade__texto h1,
+          .loja-identidade__descricao {
+            text-shadow: 0 1px 5px rgba(0,0,0,.45);
+          }
+
+
+          /* RESTAURA LED DOS CARDS DE DESTAQUE */
+          .vitrine-destaques__card {
+            --led-angle: 0deg !important;
+            position: relative !important;
+            isolation: isolate !important;
+            padding: 2px !important;
+            border: 0 !important;
+            background:
+              conic-gradient(
+                from var(--led-angle),
+                transparent 0deg 238deg,
+                color-mix(in srgb, var(--cor-loja) 88%, #5b5cff) 270deg,
+                #a8c7ff 296deg,
+                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 316deg,
+                transparent 344deg 360deg
+              ) !important;
+            box-shadow:
+              0 12px 26px rgba(20,34,51,.08),
+              0 0 16px color-mix(in srgb, var(--cor-loja) 11%, transparent) !important;
+            animation: ledCardRound 3.8s linear infinite !important;
+          }
+
+          .vitrine-destaques__card::before {
+            content: '' !important;
+            display: block !important;
+            position: absolute !important;
+            inset: 2px !important;
+            z-index: -1 !important;
+            border-radius: 20px !important;
+            background: #fff !important;
+          }
+
+          .vitrine-destaques__card::after {
+            content: '' !important;
+            display: block !important;
+            position: absolute !important;
+            inset: 0 !important;
+            pointer-events: none !important;
+            border-radius: inherit !important;
+            box-shadow:
+              inset 0 0 0 1px rgba(255,255,255,.45),
+              0 0 18px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;
+          }
+
+          .vitrine-destaques__imagem {
+            position: relative !important;
+            z-index: 1 !important;
+            margin: 0 !important;
+            border-radius: 20px 20px 0 0 !important;
+          }
+
+          .vitrine-destaques__conteudo {
+            position: relative !important;
+            z-index: 1 !important;
+            margin: 0 !important;
+            border-radius: 0 0 20px 20px !important;
+            background: #fff !important;
+          }
+
+          @keyframes ledCardRound {
+            to { --led-angle: 360deg; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .vitrine-destaques__card {
+              animation: none !important;
+            }
+          }
+
+
+          /* LED ROBUSTO DOS DESTAQUES: gira a luz de verdade, sem depender de @property */
+          .vitrine-destaques__card {
+            position: relative !important;
+            isolation: isolate !important;
+            overflow: hidden !important;
+            padding: 2px !important;
+            border: 0 !important;
+            border-radius: 22px !important;
+            background: #ffffff !important;
+            box-shadow:
+              0 12px 26px rgba(20,34,51,.08),
+              0 0 18px color-mix(in srgb, var(--cor-loja) 14%, transparent) !important;
+            animation: none !important;
+          }
+
+          .vitrine-destaques__card::before {
+            content: "" !important;
+            display: block !important;
+            position: absolute !important;
+            z-index: 0 !important;
+            top: -55% !important;
+            left: -35% !important;
+            width: 170% !important;
+            height: 210% !important;
+            border-radius: 50% !important;
+            background:
+              conic-gradient(
+                from 0deg,
+                transparent 0deg 245deg,
+                #4f46e5 268deg,
+                #67a8ff 286deg,
+                #c084fc 304deg,
+                transparent 326deg 360deg
+              ) !important;
+            transform-origin: 50% 50% !important;
+            animation: kodvexaLedGirar 2.7s linear infinite !important;
+            pointer-events: none !important;
+          }
+
+          .vitrine-destaques__card::after {
+            content: "" !important;
+            display: block !important;
+            position: absolute !important;
+            z-index: 1 !important;
+            inset: 2px !important;
+            border-radius: 20px !important;
+            background: #fff !important;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,.45) !important;
+            pointer-events: none !important;
+          }
+
+          .vitrine-destaques__imagem,
+          .vitrine-destaques__conteudo {
+            position: relative !important;
+            z-index: 2 !important;
+          }
+
+          .vitrine-destaques__imagem {
+            margin: 0 !important;
+            border-radius: 20px 20px 0 0 !important;
+            overflow: hidden !important;
+          }
+
+          .vitrine-destaques__conteudo {
+            margin: 0 !important;
+            border-radius: 0 0 20px 20px !important;
+            background: #fff !important;
+          }
+
+          @keyframes kodvexaLedGirar {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .vitrine-destaques__card::before {
+              animation: none !important;
+            }
+          }
+
+        `}</style>
+
+        <section className="loja-identidade">
+          <div className="loja-identidade__logo">
+            {loja.logo_url ? <img src={loja.logo_url} alt={loja.nome} /> : <Store size={26} />}
+          </div>
+
+          <div className="loja-identidade__texto">
+            <span>Loja oficial</span>
+            <h1>{loja.nome}</h1>
+
+            {loja.descricao && (
+              <p className="loja-identidade__descricao">{loja.descricao}</p>
+            )}
+
+            <div className="loja-identidade__meta">
+              <span className={loja.aberto ? 'aberto' : 'fechado'}>
+                <i />
+                {loja.aberto ? 'Aberto agora' : 'Fechado'}
+              </span>
+              <span><Clock3 size={13} /> {loja.tempo_medio_min || 40} min</span>
+            </div>
+          </div>
+        </section>
+
         <div className="busca">
           <Search size={20} />
           <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar no cardápio" />
         </div>
 
-        <nav className="categorias">
+        <nav className="categorias categorias-filtro categorias-clean">
+          <button
+            type="button"
+            className={categoriaSelecionada === 'todos' ? 'ativo' : ''}
+            onClick={() => setCategoriaSelecionada('todos')}
+          >
+            Todos
+          </button>
+
           {categorias.map((categoria) => (
-            <a key={categoria.id} href={`#categoria-${categoria.id}`}>{categoria.nome}</a>
+            <button
+              type="button"
+              key={categoria.id}
+              className={categoriaSelecionada === categoria.id ? 'ativo' : ''}
+              onClick={() => setCategoriaSelecionada(categoria.id)}
+            >
+              {categoria.nome}
+            </button>
           ))}
         </nav>
 
-        {categorias.map((categoria) => {
+        {categoriaSelecionada === 'todos' && !busca.trim() && produtosDestaque.length > 0 && (
+          <section className="vitrine-destaques">
+            <div className="vitrine-destaques__topo">
+              <div>
+                <span className="vitrine-destaques__selo"><Sparkles size={13} /> Em destaque</span>
+                <h2>Escolhas da casa</h2>
+                <p>Uma seleção para pedir sem pensar duas vezes.</p>
+              </div>
+            </div>
+
+            <div className="vitrine-destaques__lista">
+              {produtosDestaque.map((produto) => {
+                const precoNormal = Number(produto.preco || 0)
+                const precoPromo = Number(produto.preco_promocional || 0)
+                const temPromo = precoPromo > 0 && precoPromo < precoNormal
+
+                return (
+                  <button
+                    type="button"
+                    key={produto.id}
+                    className="vitrine-destaques__card"
+                    onClick={() => abrirProduto(produto)}
+                  >
+                    <div className="vitrine-destaques__imagem">
+                      {produto.imagem_url
+                        ? <img src={produto.imagem_url} alt={produto.nome} />
+                        : <ShoppingBag size={30} />}
+
+                      <span className="vitrine-destaques__badge">
+                        {temPromo ? 'OFERTA' : 'DESTAQUE'}
+                      </span>
+                    </div>
+
+                    <div className="vitrine-destaques__conteudo">
+                      <strong>{produto.nome}</strong>
+                      <small>{produto.descricao || 'Uma boa escolha para o seu pedido.'}</small>
+
+                      <div className="vitrine-destaques__precos">
+                        {temPromo && <del>{dinheiro(precoNormal)}</del>}
+                        <b>{dinheiro(temPromo ? precoPromo : precoNormal)}</b>
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {categorias
+          .filter((categoria) => categoriaSelecionada === 'todos' || categoria.id === categoriaSelecionada)
+          .map((categoria) => {
           const lista = produtosFiltrados.filter((produto) => produto.categoria_id === categoria.id)
           if (!lista.length) return null
           return (
@@ -378,6 +2493,26 @@ function Cardapio() {
         {!produtosFiltrados.length && <p className="vazio">Nenhum produto encontrado.</p>}
       </main>
 
+      <nav className={`loja-mobile-nav ${(produtoAberto || carrinhoAberto || checkoutAberto || pedidoCriado) ? 'oculto-modal' : ''}`} aria-label="Navegação da loja">
+        <button type="button" className="ativo" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+          <Home size={19} />
+          <span>Início</span>
+        </button>
+        <button type="button" onClick={() => document.querySelector('.categorias-filtro')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+          <Search size={19} />
+          <span>Cardápio</span>
+        </button>
+        <button type="button" className={carrinho.length ? 'tem-itens' : ''} onClick={() => setCarrinhoAberto(true)}>
+          <ShoppingBag size={19} />
+          <span>Carrinho</span>
+          {carrinho.length > 0 && <b>{carrinho.reduce((soma, item) => soma + item.quantidade, 0)}</b>}
+        </button>
+        <button type="button" onClick={() => alert('Acompanhamento de pedidos será a próxima etapa.')}>
+          <Clock3 size={19} />
+          <span>Pedidos</span>
+        </button>
+      </nav>
+
       {totalItens > 0 && (
         <button className="barra-carrinho" onClick={() => setCarrinhoAberto(true)}>
           <span className="bolha">{totalItens}</span>
@@ -387,43 +2522,702 @@ function Cardapio() {
       )}
 
       {produtoAberto && (
-        <div className="modal-fundo" onMouseDown={() => setProdutoAberto(null)}>
-          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-            <button className="fechar" onClick={() => setProdutoAberto(null)}><X /></button>
-            <div className="modal__icone"><ShoppingBag size={42} /></div>
-            <h2>{produtoAberto.nome}</h2>
-            <p>{produtoAberto.descricao}</p>
-            <h3>{dinheiro(produtoAberto.preco_promocional || produtoAberto.preco)}</h3>
-            <div className="modal__rodape">
-              <div className="quantidade">
-                <button onClick={() => setQuantidade((q) => Math.max(1, q - 1))}><Minus /></button>
-                <b>{quantidade}</b>
-                <button onClick={() => setQuantidade((q) => q + 1)}><Plus /></button>
+        <div className="modal-fundo modal-produto-fundo" onMouseDown={() => setProdutoAberto(null)}>
+          <div className="modal modal-produto" onMouseDown={(e) => e.stopPropagation()}>
+            <button className="fechar fechar-produto" onClick={() => setProdutoAberto(null)} aria-label="Fechar produto"><X /></button>
+
+            <div className="modal-produto__midia">
+              {produtoAberto.imagem_url ? (
+                <img src={produtoAberto.imagem_url} alt={produtoAberto.nome} />
+              ) : (
+                <div className="modal-produto__sem-foto"><ShoppingBag size={48} /></div>
+              )}
+              {produtoAberto.destaque && <span className="modal-produto__destaque">Mais pedido</span>}
+            </div>
+
+            <div className="modal-produto__conteudo">
+              <div className="modal-produto__categoria">
+                {categoriaProdutoAberto?.nome || 'Produto'}
               </div>
-              <button className="primario" onClick={adicionarAoCarrinho}>
-                Adicionar · {dinheiro(Number(produtoAberto.preco_promocional || produtoAberto.preco) * quantidade)}
-              </button>
+              <h2>{produtoAberto.nome}</h2>
+              <p>{produtoAberto.descricao || 'Confira os detalhes deste item e adicione ao seu pedido.'}</p>
+
+              <div className="modal-produto__preco">
+                {produtoAberto.preco_promocional && Number(produtoAberto.preco_promocional) < Number(produtoAberto.preco) && (
+                  <small>{dinheiro(produtoAberto.preco)}</small>
+                )}
+                <strong>{dinheiro(produtoAberto.preco_promocional || produtoAberto.preco)}</strong>
+              </div>
+
+              {!produtoEhBebida && gruposDoProduto.map((grupo) => {
+                const selecionados = escolhasAdicionais[grupo.id] || []
+                const minimo = grupo.obrigatorio ? Math.max(Number(grupo.minimo || 0), 1) : Number(grupo.minimo || 0)
+                return <section key={grupo.id} style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid #e7ebf2' }}>
+                  <div className="modal-produto__titulo-opcao"><div><strong>{grupo.nome}</strong><span>{grupo.maximo ? `Escolha até ${grupo.maximo}` : 'Escolha as opções desejadas'}</span></div><span className={grupo.obrigatorio ? '' : 'opcional'}>{grupo.obrigatorio ? 'Obrigatório' : 'Opcional'}</span></div>
+                  <div style={{ display: 'grid', gap: 9, marginTop: 10 }}>{adicionaisDoGrupo(grupo.id).map((adicional) => { const marcado = selecionados.includes(adicional.id); return <button key={adicional.id} type="button" onClick={() => alternarAdicional(grupo, adicional)} style={{ minHeight: 52, display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center', gap: 10, padding: '10px 12px', border: marcado ? '1px solid #4f46e5' : '1px solid #e0e6ef', borderRadius: 13, background: marcado ? '#f3f1ff' : '#fff', color: '#172033', textAlign: 'left' }}><strong>{adicional.nome}</strong><span style={{ color: '#596579', fontWeight: 700 }}>{Number(adicional.preco || 0) > 0 ? `+ ${dinheiro(adicional.preco)}` : 'Grátis'}</span><span style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', borderRadius: Number(grupo.maximo) === 1 ? '50%' : 7, border: marcado ? '1px solid #4f46e5' : '1px solid #cfd7e3', background: marcado ? '#4f46e5' : '#fff', color: '#fff' }}>{marcado ? '✓' : ''}</span></button> })}</div>
+                  {minimo > 0 && selecionados.length < minimo && <small style={{ display: 'block', marginTop: 8, color: '#b54708' }}>Escolha pelo menos {minimo} opção(ões).</small>}
+                </section>
+              })}
+
+              {produtoEhBebida && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  marginTop: 12,
+                  padding: '12px 14px',
+                  border: '1px solid #e6eaf0',
+                  borderRadius: 14,
+                  background: '#f8fafc'
+                }}>
+                  <div>
+                    <strong style={{ display: 'block', color: '#172033', fontSize: 14 }}>Bebida</strong>
+                    <span style={{ display: 'block', marginTop: 3, color: '#7a8799', fontSize: 12 }}>
+                      {produtoAberto.descricao || 'Adicione a quantidade desejada ao pedido.'}
+                    </span>
+                  </div>
+                  <span style={{
+                    flex: '0 0 auto',
+                    padding: '6px 9px',
+                    borderRadius: 999,
+                    background: '#eef2ff',
+                    color: '#4338ca',
+                    fontSize: 11,
+                    fontWeight: 850
+                  }}>Gelada</span>
+                </div>
+              )}
+
+
+              {(produtoEhDoce || produtoEhRefeicao) && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  marginTop: 12,
+                  padding: '11px 13px',
+                  border: '1px solid #e6eaf0',
+                  borderRadius: 14,
+                  background: '#fafbfc'
+                }}>
+                  <div>
+                    <strong style={{ display: 'block', color: '#172033', fontSize: 13 }}>
+                      {produtoEhDoce ? 'Doce / sobremesa' : 'Refeição'}
+                    </strong>
+                    <span style={{ display: 'block', marginTop: 3, color: '#7a8799', fontSize: 12 }}>
+                      {produtoEhDoce
+                        ? 'Escolha a quantidade e personalize se precisar.'
+                        : 'Confira os adicionais e personalize seu prato.'}
+                    </span>
+                  </div>
+                  <span style={{
+                    flex: '0 0 auto',
+                    padding: '6px 9px',
+                    borderRadius: 999,
+                    background: produtoEhDoce ? '#fff4e8' : '#eef7ff',
+                    color: produtoEhDoce ? '#b45309' : '#2563eb',
+                    fontSize: 11,
+                    fontWeight: 850
+                  }}>
+                    {produtoEhDoce ? 'Sobremesa' : 'Prato'}
+                  </span>
+                </div>
+              )}
+
+              <div className="modal-produto__separador" />
+              <div className="modal-produto__titulo-opcao">
+                <div>
+                  <strong>Quantidade</strong>
+                  <span>{
+                    produtoEhBebida
+                      ? 'Quantas unidades você quer?'
+                      : produtoEhDoce
+                        ? 'Quantas unidades deseja adicionar?'
+                        : produtoEhRefeicao
+                          ? 'Quantos pratos deseja adicionar?'
+                          : 'Escolha quantos você quer adicionar'
+                  }</span>
+                </div>
+                <span>Obrigatório</span>
+              </div>
+
+              {!produtoEhBebida && (
+                <div className="modal-produto__personalizar">
+                  <div className="modal-produto__titulo-opcao">
+                    <div>
+                      <strong>{observacaoTituloProduto}</strong>
+                      <span>{observacaoExemploProduto}</span>
+                    </div>
+                    <span className="opcional">Opcional</span>
+                  </div>
+                  <textarea
+                    value={observacaoItem}
+                    onChange={(e) => setObservacaoItem(e.target.value.slice(0, 180))}
+                    placeholder={observacaoPlaceholderProduto}
+                    rows={produtoEhDoce ? 2 : 3}
+                  />
+                  <small>{observacaoItem.length}/180</small>
+                </div>
+              )}
+
+              <div className="modal__rodape modal-produto__rodape">
+                <div className="quantidade quantidade-produto">
+                  <button type="button" onClick={() => setQuantidade((q) => Math.max(1, q - 1))} aria-label="Diminuir quantidade"><Minus /></button>
+                  <b>{quantidade}</b>
+                  <button type="button" onClick={() => setQuantidade((q) => q + 1)} aria-label="Aumentar quantidade"><Plus /></button>
+                </div>
+                <button className="primario adicionar-produto" onClick={adicionarAoCarrinho}>
+                  <span>Adicionar</span>
+                  <strong>{dinheiro(precoUnitarioConfigurado * quantidade)}</strong>
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {carrinhoAberto && (
-        <div className="modal-fundo" onMouseDown={() => setCarrinhoAberto(false)}>
-          <aside className="carrinho" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="carrinho__cabecalho"><h2>Seu carrinho</h2><button onClick={() => setCarrinhoAberto(false)}><X /></button></div>
-            <div className="carrinho__itens">
-              {carrinho.map((item) => (
-                <div className="item-carrinho" key={item.id}>
-                  <div><strong>{item.nome}</strong><span>{dinheiro(item.preco * item.quantidade)}</span></div>
-                  <div className="quantidade pequena">
-                    <button onClick={() => alterarItem(item.id, -1)}><Minus /></button><b>{item.quantidade}</b><button onClick={() => alterarItem(item.id, 1)}><Plus /></button>
-                  </div>
+        <div className="modal-fundo carrinho-fundo-premium" onMouseDown={() => setCarrinhoAberto(false)}>
+          <style>{`
+            @media (max-width: 600px) {
+              .loja-mobile-nav.oculto-modal {
+                display: none !important;
+              }
+
+              .carrinho-fundo-premium {
+                position: fixed !important;
+                inset: 0 !important;
+                display: block !important;
+                padding: 0 !important;
+                background: #f7f9fc !important;
+                backdrop-filter: none !important;
+              }
+
+              .carrinho-premium {
+                position: fixed !important;
+                inset: 0 !important;
+                width: 100% !important;
+                max-width: none !important;
+                height: 100dvh !important;
+                max-height: 100dvh !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                display: flex !important;
+                flex-direction: column !important;
+                overflow: hidden !important;
+                border-radius: 0 !important;
+                background: #f7f9fc !important;
+                box-shadow: none !important;
+              }
+
+              .carrinho-premium__cabecalho {
+                flex: 0 0 auto;
+                min-height: 76px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 16px 18px 13px;
+                border-bottom: 1px solid #e9eef4;
+                background: #fff;
+              }
+
+              .carrinho-premium__titulo {
+                display: flex;
+                align-items: center;
+                gap: 11px;
+              }
+
+              .carrinho-premium__icone {
+                width: 44px;
+                height: 44px;
+                display: grid;
+                place-items: center;
+                flex: 0 0 44px;
+                border-radius: 14px;
+                background: color-mix(in srgb, var(--cor-loja) 10%, #fff);
+                color: var(--cor-loja);
+              }
+
+              .carrinho-premium__titulo h2 {
+                margin: 0;
+                color: #162033;
+                font-size: 1.13rem;
+              }
+
+              .carrinho-premium__titulo span {
+                display: block;
+                margin-top: 2px;
+                color: #8794a7;
+                font-size: .72rem;
+              }
+
+              .carrinho-premium__fechar {
+                width: 40px;
+                height: 40px;
+                display: grid;
+                place-items: center;
+                flex: 0 0 40px;
+                border: 1px solid #e7ecf2;
+                border-radius: 50%;
+                background: #f8fafc;
+                color: #65758a;
+              }
+
+              .carrinho-premium__scroll {
+                flex: 1 1 auto;
+                min-height: 0;
+                overflow-y: auto;
+                padding: 12px 14px 18px;
+                overscroll-behavior: contain;
+              }
+
+              .carrinho-premium__entrega {
+                display: grid;
+                gap: 10px;
+                margin-bottom: 12px;
+                padding: 14px;
+                border: 1px solid #e4eaf1;
+                border-radius: 18px;
+                background: linear-gradient(145deg, #fff, #fbfcff);
+                box-shadow: 0 7px 18px rgba(20, 34, 51, .05);
+              }
+
+              .carrinho-premium__entrega-topo {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+              }
+
+              .carrinho-premium__entrega-topo strong {
+                color: #172033;
+                font-size: .88rem;
+              }
+
+              .carrinho-premium__entrega-topo small {
+                color: #7e8da1;
+                font-size: .7rem;
+              }
+
+              .carrinho-premium__tipos {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+              }
+
+              .carrinho-premium__tipos button {
+                min-height: 54px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                border: 1px solid #dfe6ee;
+                border-radius: 14px;
+                background: #fff;
+                color: #56677d;
+                font: inherit;
+                font-size: .78rem;
+                font-weight: 850;
+              }
+
+              .carrinho-premium__tipos button.ativo {
+                border-color: var(--cor-loja);
+                background: color-mix(in srgb, var(--cor-loja) 8%, #fff);
+                color: var(--cor-loja);
+                box-shadow: 0 6px 16px color-mix(in srgb, var(--cor-loja) 13%, transparent);
+              }
+
+              .carrinho-premium__item {
+                display: grid;
+                grid-template-columns: 84px minmax(0, 1fr);
+                gap: 12px;
+                margin-bottom: 10px;
+                padding: 12px;
+                border: 1px solid #e3e9f0;
+                border-radius: 18px;
+                background: #fff;
+                box-shadow: 0 7px 18px rgba(20, 34, 51, .05);
+              }
+
+              .carrinho-premium__foto {
+                width: 84px;
+                height: 84px;
+                overflow: hidden;
+                border: 1px solid #edf1f5;
+                border-radius: 15px;
+                background: #f5f7fa;
+              }
+
+              .carrinho-premium__foto img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+              }
+
+              .carrinho-premium__sem-foto {
+                width: 100%;
+                height: 100%;
+                display: grid;
+                place-items: center;
+                color: #92a0b2;
+              }
+
+              .carrinho-premium__item-conteudo {
+                min-width: 0;
+                display: grid;
+                gap: 7px;
+              }
+
+              .carrinho-premium__item-topo {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 9px;
+              }
+
+              .carrinho-premium__item-topo strong {
+                color: #172033;
+                font-size: .9rem;
+              }
+
+              .carrinho-premium__excluir {
+                width: 32px;
+                height: 32px;
+                display: grid;
+                place-items: center;
+                flex: 0 0 32px;
+                border: 1px solid #ffd9dc;
+                border-radius: 10px;
+                background: #fff5f6;
+                color: #e5484d;
+              }
+
+              .carrinho-premium__extras {
+                display: grid;
+                gap: 3px;
+              }
+
+              .carrinho-premium__extras small {
+                color: #718198;
+                font-size: .7rem;
+                line-height: 1.35;
+              }
+
+              .carrinho-premium__item-rodape {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+              }
+
+              .carrinho-premium__item-rodape > strong {
+                color: #162033;
+                font-size: .9rem;
+              }
+
+              .carrinho-premium__item-rodape .quantidade {
+                min-height: 38px !important;
+              }
+
+              .carrinho-premium__mais {
+                width: 100%;
+                min-height: 52px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+                margin: 4px 0 12px;
+                padding: 0 14px;
+                border: 1px dashed #cfd9e6;
+                border-radius: 16px;
+                background: #fff;
+                color: #33445b;
+                font: inherit;
+              }
+
+              .carrinho-premium__mais span {
+                display: flex;
+                align-items: center;
+                gap: 9px;
+                font-size: .8rem;
+                font-weight: 850;
+              }
+
+              .carrinho-premium__resumo {
+                display: grid;
+                gap: 8px;
+                padding: 15px;
+                border: 1px solid #e3e9f0;
+                border-radius: 18px;
+                background: #fff;
+              }
+
+              .carrinho-premium__linha {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                color: #718198;
+                font-size: .78rem;
+              }
+
+              .carrinho-premium__linha strong {
+                color: #25344a;
+              }
+
+              .carrinho-premium__linha.total {
+                margin-top: 3px;
+                padding-top: 10px;
+                border-top: 1px solid #edf1f5;
+                color: #172033;
+                font-size: .9rem;
+                font-weight: 850;
+              }
+
+              .carrinho-premium__linha.total strong {
+                color: #101a29;
+                font-size: 1.08rem;
+              }
+
+              .carrinho-premium__rodape {
+                flex: 0 0 auto;
+                width: 100%;
+                padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
+                border-top: 1px solid #e6ebf1;
+                background: rgba(255,255,255,.99);
+                box-shadow: 0 -8px 22px rgba(20,34,51,.07);
+                backdrop-filter: blur(12px);
+              }
+
+              .carrinho-premium__continuar {
+                width: 100%;
+                min-height: 56px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 0 16px;
+                border: 0;
+                border-radius: 16px;
+                background: linear-gradient(135deg, var(--cor-loja), color-mix(in srgb, var(--cor-loja) 76%, #6d36ff));
+                color: #fff;
+                font: inherit;
+                box-shadow: 0 12px 26px color-mix(in srgb, var(--cor-loja) 25%, transparent);
+              }
+
+              .carrinho-premium__continuar span {
+                display: grid;
+                gap: 1px;
+                text-align: left;
+              }
+
+              .carrinho-premium__continuar span strong {
+                font-size: .9rem;
+              }
+
+              .carrinho-premium__continuar span small {
+                color: rgba(255,255,255,.75);
+                font-size: .65rem;
+              }
+
+              .carrinho-premium__continuar > strong {
+                font-size: .92rem;
+              }
+
+              .carrinho-premium__vazio {
+                min-height: 55dvh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 9px;
+                padding: 30px;
+                text-align: center;
+              }
+
+              .carrinho-premium__vazio div {
+                width: 74px;
+                height: 74px;
+                display: grid;
+                place-items: center;
+                border-radius: 22px;
+                background: color-mix(in srgb, var(--cor-loja) 10%, #fff);
+                color: var(--cor-loja);
+              }
+
+              .carrinho-premium__vazio h3 {
+                margin: 0;
+                color: #172033;
+              }
+
+              .carrinho-premium__vazio p {
+                max-width: 260px;
+                margin: 0;
+                color: #8290a4;
+                font-size: .8rem;
+                line-height: 1.45;
+              }
+            }
+          `}</style>
+
+          <aside className="carrinho carrinho-premium" onMouseDown={(e) => e.stopPropagation()}>
+            <header className="carrinho-premium__cabecalho">
+              <div className="carrinho-premium__titulo">
+                <div className="carrinho-premium__icone"><ShoppingBag size={22} /></div>
+                <div>
+                  <h2>Seu carrinho</h2>
+                  <span>{totalItens ? `${totalItens} ${totalItens === 1 ? 'item' : 'itens'} no pedido` : 'Seu pedido começa aqui'}</span>
                 </div>
-              ))}
-            </div>
-            <div className="carrinho__total"><span>Total</span><strong>{dinheiro(total)}</strong></div>
-            <button className="primario finalizar" onClick={() => { setCarrinhoAberto(false); setCheckoutAberto(true) }}>Continuar pedido</button>
+              </div>
+              <button className="carrinho-premium__fechar" onClick={() => setCarrinhoAberto(false)} aria-label="Fechar carrinho"><X size={20} /></button>
+            </header>
+
+            {carrinho.length === 0 ? (
+              <div className="carrinho-premium__vazio">
+                <div><ShoppingBag size={31} /></div>
+                <h3>Seu carrinho está vazio</h3>
+                <p>Escolha seus favoritos no cardápio e monte seu pedido.</p>
+                <button
+                  type="button"
+                  className="primario"
+                  onClick={() => {
+                    setCarrinhoAberto(false)
+                    setTimeout(() => document.querySelector('.categorias-filtro')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
+                  }}
+                >
+                  Explorar cardápio
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="carrinho-premium__scroll">
+                  <section className="carrinho-premium__entrega">
+                    <div className="carrinho-premium__entrega-topo">
+                      <div>
+                        <strong>Como você quer receber?</strong>
+                        <small style={{ display: 'block', marginTop: 3 }}>
+                          {formulario.tipo === 'entrega'
+                            ? `Entrega em aproximadamente ${loja.tempo_medio_min || 40} min`
+                            : 'Retire seu pedido no estabelecimento'}
+                        </small>
+                      </div>
+                    </div>
+
+                    <div className="carrinho-premium__tipos">
+                      {loja.faz_entrega !== false && (
+                        <button
+                          type="button"
+                          className={formulario.tipo === 'entrega' ? 'ativo' : ''}
+                          onClick={() => atualizarCampo('tipo', 'entrega')}
+                        >
+                          <Bike size={18} /> Entrega
+                        </button>
+                      )}
+
+                      {loja.permite_retirada !== false && (
+                        <button
+                          type="button"
+                          className={formulario.tipo === 'retirada' ? 'ativo' : ''}
+                          onClick={() => atualizarCampo('tipo', 'retirada')}
+                        >
+                          <Store size={18} /> Retirada
+                        </button>
+                      )}
+                    </div>
+                  </section>
+
+                  {carrinho.map((item) => (
+                    <article className="carrinho-premium__item" key={item.chaveItem || item.id}>
+                      <div className="carrinho-premium__foto">
+                        {item.imagem_url
+                          ? <img src={item.imagem_url} alt={item.nome} />
+                          : <div className="carrinho-premium__sem-foto"><ShoppingBag size={25} /></div>}
+                      </div>
+
+                      <div className="carrinho-premium__item-conteudo">
+                        <div className="carrinho-premium__item-topo">
+                          <strong>{item.nome}</strong>
+                          <button
+                            type="button"
+                            className="carrinho-premium__excluir"
+                            onClick={() => setCarrinho((atual) => atual.filter((produto) => produto.chaveItem !== item.chaveItem))}
+                            aria-label={`Remover ${item.nome}`}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+
+                        <div className="carrinho-premium__extras">
+                          {(item.adicionaisEscolhidos || []).map((a) => (
+                            <small key={a.id}>
+                              + {a.nome}{Number(a.preco || 0) > 0 ? ` • ${dinheiro(a.preco)}` : ''}
+                            </small>
+                          ))}
+                          {item.observacaoItem && <small>Obs.: {item.observacaoItem}</small>}
+                        </div>
+
+                        <div className="carrinho-premium__item-rodape">
+                          <strong>{dinheiro(item.preco * item.quantidade)}</strong>
+                          <div className="quantidade pequena">
+                            <button type="button" onClick={() => alterarItem(item.chaveItem || item.id, -1)}><Minus size={16} /></button>
+                            <b>{item.quantidade}</b>
+                            <button type="button" onClick={() => alterarItem(item.chaveItem || item.id, 1)}><Plus size={16} /></button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+
+                  <button
+                    type="button"
+                    className="carrinho-premium__mais"
+                    onClick={() => {
+                      setCarrinhoAberto(false)
+                      setTimeout(() => document.querySelector('.categorias-filtro')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80)
+                    }}
+                  >
+                    <span><Plus size={18} /> Adicionar mais itens</span>
+                    <ChevronRight size={18} />
+                  </button>
+
+                  <section className="carrinho-premium__resumo">
+                    <div className="carrinho-premium__linha">
+                      <span>Subtotal</span>
+                      <strong>{dinheiro(total)}</strong>
+                    </div>
+
+                    <div className="carrinho-premium__linha">
+                      <span>{formulario.tipo === 'entrega' ? 'Taxa de entrega' : 'Retirada'}</span>
+                      <strong>{formulario.tipo === 'entrega' ? 'Calculada pelo CEP' : 'Grátis'}</strong>
+                    </div>
+
+                    <div className="carrinho-premium__linha total">
+                      <span>Total por enquanto</span>
+                      <strong>{dinheiro(total)}</strong>
+                    </div>
+                  </section>
+                </div>
+
+                <footer className="carrinho-premium__rodape">
+                  <button
+                    className="carrinho-premium__continuar"
+                    onClick={() => {
+                      setCarrinhoAberto(false)
+                      setCheckoutAberto(true)
+                    }}
+                  >
+                    <span>
+                      <strong>Continuar pedido</strong>
+                      <small>{formulario.tipo === 'entrega' ? 'Informe endereço e pagamento' : 'Informe seus dados e pagamento'}</small>
+                    </span>
+                    <strong>{dinheiro(total)}</strong>
+                  </button>
+                </footer>
+              </>
+            )}
           </aside>
         </div>
       )}
@@ -476,7 +3270,6 @@ function Cardapio() {
             </div>
 
             {formulario.pagamento === 'dinheiro' && <label className="campo-solto">Troco para<input value={formulario.troco} onChange={(e) => atualizarCampo('troco', e.target.value)} placeholder="Ex.: 100,00" inputMode="decimal" /></label>}
-            <label className="campo-solto">Observação<textarea value={formulario.observacao} onChange={(e) => atualizarCampo('observacao', e.target.value)} placeholder="Ex.: retirar cebola" /></label>
 
             <div className="resumo-checkout"><span>Total do pedido</span><strong>{dinheiro(total + (formulario.tipo === 'entrega' && entregaCalculada?.valido ? entregaCalculada.taxa : 0))}</strong></div>
             {formulario.tipo === 'entrega' && entregaCalculada?.valido && <small className="taxa-aviso">Entrega: {entregaCalculada.taxa === 0 ? 'grátis' : dinheiro(entregaCalculada.taxa)} · distância {entregaCalculada.distanciaKm.toFixed(2).replace('.', ',')} km.</small>}
@@ -559,34 +3352,295 @@ function LoginPainel({ pagina = 'pedidos' }) {
   )
 }
 
+const estilosMenuDesktop = `
+@media (min-width: 721px) {
+  .menu-mobile-topo,
+  .menu-mobile-overlay,
+  .menu-mobile-fechar {
+    display: none !important;
+  }
+}
+`
+
 function NavegacaoPainel({ loja, ativo }) {
+  const [menuMobileAberto, setMenuMobileAberto] = useState(false)
+
+  const fecharMenu = () => setMenuMobileAberto(false)
+
   return (
-    <aside className="topo-painel">
-      <div className="marca-lateral">
-        <div className="marca-lateral__icone">K</div>
-        <div><span>KODVEXA FOOD</span><h1>{loja?.nome || 'Painel'}</h1></div>
+    <>
+      <style>{estilosMenuDesktop}</style>
+      <style>{`
+        .menu-mobile-topo {
+          display: none;
+        }
+
+        @media (max-width: 720px) {
+          .painel-food {
+            padding-bottom: 20px !important;
+          }
+
+          .painel-food > .topo-painel {
+            position: fixed !important;
+            z-index: 1200 !important;
+            top: 0 !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            width: min(300px, 84vw) !important;
+            min-height: 100dvh !important;
+            height: 100dvh !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 0 !important;
+            padding: 18px 15px calc(18px + env(safe-area-inset-bottom)) !important;
+            border-right: 1px solid #26364d !important;
+            background: linear-gradient(180deg, #0b1727, #07111f) !important;
+            box-shadow: 22px 0 50px rgba(0,0,0,.38) !important;
+            transform: translateX(-105%) !important;
+            transition: transform .22s ease !important;
+            overflow-y: auto !important;
+          }
+
+          .painel-food > .topo-painel.menu-mobile-aberto {
+            transform: translateX(0) !important;
+          }
+
+          .painel-food > .topo-painel .marca-lateral {
+            display: grid !important;
+            grid-template-columns: auto 1fr auto !important;
+            align-items: center !important;
+            gap: 10px !important;
+            padding: 0 2px 16px !important;
+            border-bottom: 1px solid #1f3046 !important;
+          }
+
+          .painel-food > .topo-painel .marca-lateral h1 {
+            max-width: 150px !important;
+            font-size: .92rem !important;
+          }
+
+          .painel-food > .topo-painel .rotulo-menu {
+            order: 0 !important;
+            display: block !important;
+            margin: 18px 8px 8px !important;
+          }
+
+          .painel-food > .topo-painel .menu-painel {
+            position: static !important;
+            order: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            display: grid !important;
+            grid-template-columns: 1fr !important;
+            gap: 6px !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+          }
+
+          .painel-food > .topo-painel .menu-painel a {
+            min-height: 48px !important;
+            display: flex !important;
+            flex-direction: row !important;
+            justify-content: flex-start !important;
+            gap: 11px !important;
+            padding: 0 12px !important;
+            border-radius: 12px !important;
+          }
+
+          .painel-food > .topo-painel .menu-painel a span {
+            width: auto !important;
+            font-size: .82rem !important;
+            text-align: left !important;
+          }
+
+          .painel-food > .topo-painel .lateral-resumo {
+            order: 2 !important;
+            display: grid !important;
+            margin-top: auto !important;
+          }
+
+          .painel-food > .topo-painel .acoes-lateral {
+            order: 3 !important;
+            width: 100% !important;
+            display: grid !important;
+            grid-template-columns: 1fr !important;
+            gap: 7px !important;
+            margin-top: 10px !important;
+          }
+
+          .painel-food > .topo-painel .acoes-lateral button {
+            width: 100% !important;
+            min-height: 44px !important;
+          }
+
+          .painel-food > .topo-painel .acoes-lateral button span {
+            display: inline !important;
+          }
+
+          .menu-mobile-topo {
+            position: sticky;
+            z-index: 1050;
+            top: 0;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 10px;
+            padding: 8px 12px;
+            border-bottom: 1px solid #203149;
+            background: rgba(8,19,33,.97);
+            backdrop-filter: blur(14px);
+          }
+
+          .menu-mobile-topo__marca {
+            min-width: 0;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+          }
+
+          .menu-mobile-topo__icone {
+            width: 37px;
+            height: 37px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 37px;
+            border-radius: 10px;
+            color: white;
+            background: linear-gradient(145deg, #0b5cff, #4987ff);
+            font-weight: 950;
+          }
+
+          .menu-mobile-topo__texto {
+            min-width: 0;
+            display: grid;
+            gap: 2px;
+          }
+
+          .menu-mobile-topo__texto span {
+            color: #6d86a7;
+            font-size: .57rem;
+            font-weight: 900;
+            letter-spacing: .09em;
+          }
+
+          .menu-mobile-topo__texto strong {
+            overflow: hidden;
+            color: #f3f7fc;
+            font-size: .83rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .menu-mobile-topo__botao {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 42px;
+            border: 1px solid #2a3e59;
+            border-radius: 11px;
+            color: #e5eef9;
+            background: #101f32;
+          }
+
+          .menu-mobile-fechar {
+            width: 36px;
+            height: 36px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 36px;
+            border: 1px solid #2a3e59;
+            border-radius: 11px;
+            color: #e5eef9;
+            background: #101f32;
+          }
+
+          .menu-mobile-overlay {
+            position: fixed;
+            z-index: 1150;
+            inset: 0;
+            background: rgba(0,0,0,.58);
+            backdrop-filter: blur(2px);
+          }
+
+          .conteudo-painel {
+            padding-top: 16px !important;
+          }
+        }
+      `}</style>
+
+      <div className="menu-mobile-topo">
+        <button
+          type="button"
+          className="menu-mobile-topo__botao"
+          onClick={() => setMenuMobileAberto(true)}
+          aria-label="Abrir menu"
+        >
+          <Menu size={22} />
+        </button>
+
+        <div className="menu-mobile-topo__marca">
+          <div className="menu-mobile-topo__icone">K</div>
+          <div className="menu-mobile-topo__texto">
+            <span>KODVEXA FOOD</span>
+            <strong>{loja?.nome || 'Painel'}</strong>
+          </div>
+        </div>
       </div>
-      <div className="rotulo-menu">GESTÃO</div>
-      <nav className="menu-painel">
-        <Link className={ativo === 'pedidos' ? 'ativo' : ''} to="/painel"><ShoppingBag /><span>Pedidos</span></Link>
-        <Link className={ativo === 'cardapio' ? 'ativo' : ''} to="/painel/cardapio"><ChefHat /><span>Cardápio</span></Link>
-        <Link className={ativo === 'entregas' ? 'ativo' : ''} to="/painel/entregas"><Bike /><span>Entregas</span></Link>
-        <Link className={ativo === 'configuracoes' ? 'ativo' : ''} to="/painel/configuracoes"><Store /><span>Configurações</span></Link>
-      </nav>
-      <div className="lateral-resumo">
-        <span>LINK DA LOJA</span>
-        <strong>{loja?.slug || 'carregando...'}</strong>
-        <small>Seu cardápio está pronto para receber pedidos.</small>
-      </div>
-      <div className="acoes-topo acoes-lateral">
-        {loja?.slug && (
-          <button onClick={() => window.open(`/cardapio/${loja.slug}`, '_blank')}>
-            <Store /><span>Ver cardápio</span>
+
+      {menuMobileAberto && <div className="menu-mobile-overlay" onClick={fecharMenu} />}
+
+      <aside className={`topo-painel ${menuMobileAberto ? 'menu-mobile-aberto' : ''}`}>
+        <div className="marca-lateral">
+          <div className="marca-lateral__icone">K</div>
+          <div>
+            <span>KODVEXA FOOD</span>
+            <h1>{loja?.nome || 'Painel'}</h1>
+          </div>
+          <button type="button" className="menu-mobile-fechar" onClick={fecharMenu} aria-label="Fechar menu">
+            <X size={19} />
           </button>
-        )}
-        <button onClick={() => supabase.auth.signOut()}><LogOut /><span>Sair</span></button>
-      </div>
-    </aside>
+        </div>
+
+        <div className="rotulo-menu">GESTÃO</div>
+
+        <nav className="menu-painel">
+          <Link onClick={fecharMenu} className={ativo === 'pedidos' ? 'ativo' : ''} to="/painel">
+            <ShoppingBag /><span>Pedidos</span>
+          </Link>
+          <Link onClick={fecharMenu} className={ativo === 'cardapio' ? 'ativo' : ''} to="/painel/cardapio">
+            <ChefHat /><span>Cardápio</span>
+          </Link>
+          <Link onClick={fecharMenu} className={ativo === 'entregas' ? 'ativo' : ''} to="/painel/entregas">
+            <Bike /><span>Entregas</span>
+          </Link>
+          <Link onClick={fecharMenu} className={ativo === 'configuracoes' ? 'ativo' : ''} to="/painel/configuracoes">
+            <Store /><span>Configurações</span>
+          </Link>
+        </nav>
+
+        <div className="lateral-resumo">
+          <span>LINK DA LOJA</span>
+          <strong>{loja?.slug || 'carregando...'}</strong>
+          <small>Seu cardápio está pronto para receber pedidos.</small>
+        </div>
+
+        <div className="acoes-topo acoes-lateral">
+          {loja?.slug && (
+            <button onClick={() => { window.open(`/cardapio/${loja.slug}`, '_blank'); fecharMenu() }}>
+              <Store /><span>Ver cardápio</span>
+            </button>
+          )}
+          <button onClick={() => supabase.auth.signOut()}>
+            <LogOut /><span>Sair</span>
+          </button>
+        </div>
+      </aside>
+    </>
   )
 }
 
@@ -603,6 +3657,11 @@ function PainelCardapio({ sessao }) {
   const [salvando, setSalvando] = useState(false)
   const [arquivoImagem, setArquivoImagem] = useState(null)
   const [previewImagem, setPreviewImagem] = useState('')
+  const [gruposAdicionaisPainel, setGruposAdicionaisPainel] = useState([])
+  const [adicionaisPainel, setAdicionaisPainel] = useState([])
+  const [vinculosAdicionais, setVinculosAdicionais] = useState([])
+  const [grupoForm, setGrupoForm] = useState({ nome: '', obrigatorio: false, minimo: 0, maximo: 1 })
+  const [adicionalForm, setAdicionalForm] = useState({ grupo_id: '', nome: '', preco: '' })
 
   async function carregarTudo() {
     setErro('')
@@ -613,13 +3672,21 @@ function PainelCardapio({ sessao }) {
       .maybeSingle()
     if (erroVinculo || !vinculo) { setErro('Usuário sem estabelecimento vinculado.'); setCarregando(false); return }
     setLoja(vinculo.estabelecimentos)
-    const [{ data: cats, error: erroCats }, { data: prods, error: erroProds }] = await Promise.all([
+    const [{ data: cats, error: erroCats }, { data: prods, error: erroProds }, { data: grupos, error: erroGrupos }, { data: ops, error: erroOps }] = await Promise.all([
       supabase.from('categorias').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
       supabase.from('produtos').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
+      supabase.from('grupos_adicionais').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
+      supabase.from('adicionais').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
     ])
-    if (erroCats || erroProds) setErro(erroCats?.message || erroProds?.message)
+    const idsProdutos = (prods || []).map((p) => p.id)
+    const { data: vinculos } = idsProdutos.length ? await supabase.from('produto_grupos_adicionais').select('*').in('produto_id', idsProdutos) : { data: [] }
+    if (erroCats || erroProds || erroGrupos || erroOps) setErro(erroCats?.message || erroProds?.message || erroGrupos?.message || erroOps?.message)
     setCategorias(cats || [])
     setProdutos(prods || [])
+    setGruposAdicionaisPainel(grupos || [])
+    setAdicionaisPainel(ops || [])
+    setVinculosAdicionais(vinculos || [])
+    if (!adicionalForm.grupo_id && grupos?.[0]?.id) setAdicionalForm((atual) => ({ ...atual, grupo_id: grupos[0].id }))
     setCarregando(false)
   }
 
@@ -682,6 +3749,80 @@ function PainelCardapio({ sessao }) {
     else { setModalProduto(false); setProdutoForm(vazioProduto); setArquivoImagem(null); setPreviewImagem(''); carregarTudo() }
   }
 
+  async function criarGrupoAdicional(evento) {
+    evento.preventDefault(); setErro(''); if (!grupoForm.nome.trim()) return
+    const { error } = await supabase.from('grupos_adicionais').insert({ estabelecimento_id: loja.id, nome: grupoForm.nome.trim(), obrigatorio: grupoForm.obrigatorio, minimo: grupoForm.obrigatorio ? 1 : 0, maximo: Math.max(1, Number(grupoForm.maximo || 1)), ordem: gruposAdicionaisPainel.length + 1, ativo: true })
+    if (error) setErro(error.message); else { setGrupoForm({ nome: '', obrigatorio: false, minimo: 0, maximo: 1 }); carregarTudo() }
+  }
+
+  async function criarGrupoNoProduto(evento) {
+    evento.preventDefault()
+    setErro('')
+    if (!produtoForm.id) {
+      setErro('Salve o produto primeiro para cadastrar adicionais.')
+      return
+    }
+    if (!grupoForm.nome.trim()) return
+
+    const { data: grupo, error } = await supabase
+      .from('grupos_adicionais')
+      .insert({
+        estabelecimento_id: loja.id,
+        nome: grupoForm.nome.trim(),
+        obrigatorio: grupoForm.obrigatorio,
+        minimo: grupoForm.obrigatorio ? 1 : 0,
+        maximo: Math.max(1, Number(grupoForm.maximo || 1)),
+        ordem: gruposAdicionaisPainel.length + 1,
+        ativo: true
+      })
+      .select()
+      .single()
+
+    if (error) {
+      setErro(error.message)
+      return
+    }
+
+    const { error: erroVinculo } = await supabase
+      .from('produto_grupos_adicionais')
+      .insert({ produto_id: produtoForm.id, grupo_id: grupo.id })
+
+    if (erroVinculo) {
+      setErro(erroVinculo.message)
+      return
+    }
+
+    setGrupoForm({ nome: '', obrigatorio: false, minimo: 0, maximo: 1 })
+    await carregarTudo()
+  }
+
+  async function criarAdicional(evento, grupoId) {
+    evento.preventDefault()
+    setErro('')
+    const preco = Number(String(adicionalForm.preco || '0').replace(',', '.'))
+    if (!grupoId || !adicionalForm.nome.trim() || !Number.isFinite(preco) || preco < 0) return
+
+    const { error } = await supabase.from('adicionais').insert({
+      estabelecimento_id: loja.id,
+      grupo_id: grupoId,
+      nome: adicionalForm.nome.trim(),
+      preco,
+      disponivel: true,
+      ordem: adicionaisPainel.filter((a) => a.grupo_id === grupoId).length + 1
+    })
+
+    if (error) {
+      setErro(error.message)
+    } else {
+      setAdicionalForm({ grupo_id: '', nome: '', preco: '' })
+      carregarTudo()
+    }
+  }
+
+  async function alternarAdicionalDisponivel(adicional) { const { error } = await supabase.from('adicionais').update({ disponivel: !adicional.disponivel }).eq('id', adicional.id); if (error) setErro(error.message); else carregarTudo() }
+  async function alternarGrupoProduto(produtoId, grupoId) { const existe = vinculosAdicionais.some((v) => v.produto_id === produtoId && v.grupo_id === grupoId); const r = existe ? await supabase.from('produto_grupos_adicionais').delete().eq('produto_id', produtoId).eq('grupo_id', grupoId) : await supabase.from('produto_grupos_adicionais').insert({ produto_id: produtoId, grupo_id: grupoId }); if (r.error) setErro(r.error.message); else carregarTudo() }
+
+
   async function alternarProduto(produto) {
     setProdutos((lista) => lista.map((p) => p.id === produto.id ? { ...p, disponivel: !p.disponivel } : p))
     const { error } = await supabase.from('produtos').update({ disponivel: !produto.disponivel }).eq('id', produto.id)
@@ -717,9 +3858,438 @@ function PainelCardapio({ sessao }) {
           ))}
           {!categorias.length && <div className="sem-pedidos"><ShoppingBag /><h3>Crie a primeira categoria</h3><p>Depois você poderá adicionar os produtos.</p></div>}
         </section>
+
       </main>
 
-      {modalProduto && <div className="modal-fundo"><form className="form-produto" onSubmit={salvarProduto}><button type="button" className="fechar" onClick={() => setModalProduto(false)}><X /></button><span>{produtoForm.id ? 'Editar produto' : 'Novo produto'}</span><h2>{produtoForm.id ? produtoForm.nome : 'Cadastrar produto'}</h2><label className="upload-imagem"><input type="file" accept="image/jpeg,image/png,image/webp" onChange={escolherImagem} /><div className={previewImagem ? 'com-imagem' : ''}>{previewImagem ? <img src={previewImagem} alt="Prévia do produto" /> : <><ShoppingBag /><strong>Adicionar foto</strong><small>JPG, PNG ou WEBP · até 5 MB</small></>}</div></label><label>Nome<input value={produtoForm.nome} onChange={(e) => setProdutoForm({ ...produtoForm, nome: e.target.value })} /></label><label>Descrição<textarea value={produtoForm.descricao || ''} onChange={(e) => setProdutoForm({ ...produtoForm, descricao: e.target.value })} /></label><div className="campos dois"><label>Categoria<select value={produtoForm.categoria_id} onChange={(e) => setProdutoForm({ ...produtoForm, categoria_id: e.target.value })}>{categorias.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select></label><label>Preço<input value={produtoForm.preco} onChange={(e) => setProdutoForm({ ...produtoForm, preco: e.target.value })} placeholder="0,00" inputMode="decimal" /></label></div><div className="checks-produto"><label><input type="checkbox" checked={produtoForm.disponivel} onChange={(e) => setProdutoForm({ ...produtoForm, disponivel: e.target.checked })} /> Disponível</label><label><input type="checkbox" checked={produtoForm.destaque} onChange={(e) => setProdutoForm({ ...produtoForm, destaque: e.target.checked })} /> Destacar produto</label></div><button className="primario" disabled={salvando}>{salvando ? 'Salvando...' : 'Salvar produto'}</button></form></div>}
+      {modalProduto && (
+        <div className="modal-fundo">
+          <style>{`
+            @media (min-width: 900px) {
+              .form-produto.editor-produto-desktop {
+                width: min(1120px, calc(100vw - 80px)) !important;
+                max-width: 1120px !important;
+                max-height: calc(100vh - 60px) !important;
+                padding: 28px 30px !important;
+                overflow-y: auto !important;
+              }
+
+              .editor-produto-desktop .produto-editor-grid {
+                display: grid;
+                grid-template-columns: minmax(0, .92fr) minmax(440px, 1.08fr);
+                gap: 26px;
+                align-items: start;
+              }
+
+              .editor-produto-desktop .produto-editor-principal,
+              .editor-produto-desktop .produto-editor-adicionais {
+                min-width: 0;
+                display: grid;
+                gap: 14px;
+              }
+
+              .editor-produto-desktop .produto-editor-principal {
+                position: sticky;
+                top: 0;
+              }
+
+              .editor-produto-desktop .upload-imagem > div {
+                height: 220px !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais {
+                padding: 18px;
+                border: 1px solid #243750;
+                border-radius: 18px;
+                background: linear-gradient(145deg, #0d1928, #091522);
+              }
+
+              .editor-produto-desktop > .primario {
+                margin-top: 18px !important;
+                min-height: 54px !important;
+              }
+            }
+
+            @media (max-width: 899px) {
+              .modal-fundo:has(.editor-produto-desktop) {
+                align-items: flex-end !important;
+                padding: 0 !important;
+                background: rgba(3, 9, 18, .72) !important;
+              }
+
+              .form-produto.editor-produto-desktop {
+                width: 100% !important;
+                max-width: none !important;
+                height: 94dvh !important;
+                max-height: 94dvh !important;
+                margin: 0 !important;
+                padding: 18px 16px calc(86px + env(safe-area-inset-bottom)) !important;
+                border-radius: 22px 22px 0 0 !important;
+                overflow-x: hidden !important;
+                overflow-y: auto !important;
+              }
+
+              .editor-produto-desktop > span {
+                margin-top: 2px !important;
+                font-size: .67rem !important;
+                letter-spacing: .08em !important;
+              }
+
+              .editor-produto-desktop > h2 {
+                margin: 4px 42px 14px 0 !important;
+                font-size: 1.35rem !important;
+                line-height: 1.15 !important;
+              }
+
+              .editor-produto-desktop .fechar {
+                position: absolute !important;
+                top: 14px !important;
+                right: 14px !important;
+                z-index: 20 !important;
+                width: 40px !important;
+                height: 40px !important;
+                border-radius: 50% !important;
+                background: #f5f7fb !important;
+                box-shadow: 0 4px 16px rgba(0,0,0,.12) !important;
+              }
+
+              .editor-produto-desktop .produto-editor-grid {
+                display: grid;
+                grid-template-columns: 1fr !important;
+                gap: 18px;
+              }
+
+              .editor-produto-desktop .produto-editor-principal,
+              .editor-produto-desktop .produto-editor-adicionais {
+                min-width: 0 !important;
+                display: grid;
+                gap: 12px;
+              }
+
+              .editor-produto-desktop .produto-editor-principal {
+                position: static !important;
+              }
+
+              .editor-produto-desktop .upload-imagem > div {
+                height: 170px !important;
+                border-radius: 15px !important;
+              }
+
+              .editor-produto-desktop label {
+                min-width: 0 !important;
+              }
+
+              .editor-produto-desktop input,
+              .editor-produto-desktop textarea,
+              .editor-produto-desktop select {
+                width: 100% !important;
+                min-width: 0 !important;
+                box-sizing: border-box !important;
+                font-size: 16px !important;
+              }
+
+              .editor-produto-desktop textarea {
+                min-height: 92px !important;
+                resize: vertical !important;
+              }
+
+              .editor-produto-desktop .campos.dois {
+                grid-template-columns: 1fr !important;
+                gap: 12px !important;
+              }
+
+              .editor-produto-desktop .checks-produto {
+                display: grid !important;
+                grid-template-columns: 1fr 1fr !important;
+                gap: 8px !important;
+              }
+
+              .editor-produto-desktop .checks-produto label {
+                min-height: 44px !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 8px !important;
+                padding: 0 10px !important;
+                border: 1px solid #dce3ed !important;
+                border-radius: 11px !important;
+                background: #f7f9fc !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais {
+                padding: 14px !important;
+                border: 1px solid #243750 !important;
+                border-radius: 16px !important;
+                background: #0b1726 !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais > div:first-child strong {
+                font-size: 1rem !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais > div:first-child small {
+                display: block !important;
+                margin-top: 4px !important;
+                line-height: 1.35 !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais button[style*="justify-content: space-between"] {
+                min-height: 56px !important;
+                padding: 10px 11px !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais div[style*="grid-template-columns: 1fr auto auto"] {
+                grid-template-columns: minmax(0,1fr) auto auto !important;
+                gap: 8px !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais div[style*="grid-template-columns: minmax(0,1fr) 120px auto"] {
+                grid-template-columns: 1fr !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais div[style*="grid-template-columns: minmax(160px,1fr) auto 90px auto"] {
+                grid-template-columns: 1fr !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais .botao-novo {
+                width: 100% !important;
+                justify-content: center !important;
+              }
+
+              .editor-produto-desktop > .primario {
+                position: fixed !important;
+                z-index: 1001 !important;
+                right: 12px !important;
+                bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+                left: 12px !important;
+                width: auto !important;
+                min-height: 56px !important;
+                margin: 0 !important;
+                border-radius: 14px !important;
+                box-shadow: 0 14px 35px rgba(11,92,255,.38) !important;
+              }
+            }
+
+            @media (max-width: 430px) {
+              .form-produto.editor-produto-desktop {
+                height: 96dvh !important;
+                max-height: 96dvh !important;
+                padding-right: 13px !important;
+                padding-left: 13px !important;
+              }
+
+              .editor-produto-desktop .upload-imagem > div {
+                height: 150px !important;
+              }
+
+              .editor-produto-desktop .checks-produto {
+                grid-template-columns: 1fr !important;
+              }
+
+              .editor-produto-desktop .produto-editor-adicionais {
+                padding: 12px !important;
+              }
+            }
+          `}</style>
+
+          <form className="form-produto editor-produto-desktop" onSubmit={salvarProduto}>
+            <button type="button" className="fechar" onClick={() => setModalProduto(false)}><X /></button>
+
+            <span>{produtoForm.id ? 'Editar produto' : 'Novo produto'}</span>
+            <h2>{produtoForm.id ? produtoForm.nome : 'Cadastrar produto'}</h2>
+
+            <div className="produto-editor-grid">
+              <section className="produto-editor-principal">
+                <label className="upload-imagem">
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={escolherImagem} />
+                  <div className={previewImagem ? 'com-imagem' : ''}>
+                    {previewImagem
+                      ? <img src={previewImagem} alt="Prévia do produto" />
+                      : <><ShoppingBag /><strong>Adicionar foto</strong><small>JPG, PNG ou WEBP · até 5 MB</small></>}
+                  </div>
+                </label>
+
+                <label>Nome
+                  <input value={produtoForm.nome} onChange={(e) => setProdutoForm({ ...produtoForm, nome: e.target.value })} />
+                </label>
+
+                <label>Descrição
+                  <textarea value={produtoForm.descricao || ''} onChange={(e) => setProdutoForm({ ...produtoForm, descricao: e.target.value })} />
+                </label>
+
+                <div className="campos dois">
+                  <label>Categoria
+                    <select value={produtoForm.categoria_id} onChange={(e) => setProdutoForm({ ...produtoForm, categoria_id: e.target.value })}>
+                      {categorias.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                    </select>
+                  </label>
+
+                  <label>Preço
+                    <input value={produtoForm.preco} onChange={(e) => setProdutoForm({ ...produtoForm, preco: e.target.value })} placeholder="0,00" inputMode="decimal" />
+                  </label>
+                </div>
+
+                <div className="checks-produto">
+                  <label><input type="checkbox" checked={produtoForm.disponivel} onChange={(e) => setProdutoForm({ ...produtoForm, disponivel: e.target.checked })} /> Disponível</label>
+                  <label><input type="checkbox" checked={produtoForm.destaque} onChange={(e) => setProdutoForm({ ...produtoForm, destaque: e.target.checked })} /> Destacar produto</label>
+                </div>
+              </section>
+
+              <section className="produto-editor-adicionais">
+                <div>
+                  <strong style={{ display: 'block', color: '#f4f7fb', fontSize: 17 }}>Adicionais deste produto</strong>
+                  <small style={{ color: '#8295af' }}>
+                    {produtoForm.id
+                      ? 'Escolha os grupos usados neste produto e cadastre as opções aqui mesmo.'
+                      : 'Salve o produto primeiro. Depois abra Editar para cadastrar os adicionais.'}
+                  </small>
+                </div>
+
+                {produtoForm.id && (
+                  <>
+                    {gruposAdicionaisPainel.map((grupo) => {
+                      const marcado = vinculosAdicionais.some((v) => v.produto_id === produtoForm.id && v.grupo_id === grupo.id)
+                      const opcoes = adicionaisPainel.filter((a) => a.grupo_id === grupo.id)
+
+                      return (
+                        <div
+                          key={grupo.id}
+                          style={{
+                            border: marcado ? '1px solid #316fdd' : '1px solid #263a54',
+                            borderRadius: 13,
+                            overflow: 'hidden',
+                            background: marcado ? '#102442' : '#0a1421'
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => alternarGrupoProduto(produtoForm.id, grupo.id)}
+                            style={{
+                              width: '100%',
+                              minHeight: 52,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 10,
+                              padding: '0 13px',
+                              border: 0,
+                              background: 'transparent',
+                              color: '#edf4ff',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <span style={{ textAlign: 'left' }}>
+                              <strong style={{ display: 'block' }}>{grupo.nome}</strong>
+                              <small style={{ color: '#8095b2' }}>
+                                {opcoes.length} opções · {grupo.obrigatorio ? 'obrigatório' : 'opcional'} · máx. {grupo.maximo || 'livre'}
+                              </small>
+                            </span>
+                            <span style={{ color: marcado ? '#76a7ff' : '#7f91a9', fontWeight: 800 }}>
+                              {marcado ? '✓ Usar' : '+ Usar'}
+                            </span>
+                          </button>
+
+                          {marcado && (
+                            <div style={{ padding: '0 12px 12px', display: 'grid', gap: 8 }}>
+                              {opcoes.map((a) => (
+                                <div
+                                  key={a.id}
+                                  style={{
+                                    minHeight: 42,
+                                    display: 'grid',
+                                    gridTemplateColumns: '1fr auto auto',
+                                    alignItems: 'center',
+                                    gap: 10,
+                                    padding: '7px 10px',
+                                    borderRadius: 10,
+                                    background: '#101e30'
+                                  }}
+                                >
+                                  <span style={{ color: '#dfe8f5', fontWeight: 700 }}>{a.nome}</span>
+                                  <span style={{ color: '#8eb4ff', fontWeight: 800 }}>
+                                    {Number(a.preco || 0) === 0 ? 'Grátis' : `+ ${dinheiro(a.preco)}`}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className={`interruptor ${a.disponivel ? 'ligado' : ''}`}
+                                    onClick={() => alternarAdicionalDisponivel(a)}
+                                    title={a.disponivel ? 'Pausar adicional' : 'Ativar adicional'}
+                                  >
+                                    <i />
+                                  </button>
+                                </div>
+                              ))}
+
+                              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 120px auto', gap: 8 }}>
+                                <input
+                                  value={adicionalForm.grupo_id === grupo.id ? adicionalForm.nome : ''}
+                                  onChange={(e) => setAdicionalForm({
+                                    grupo_id: grupo.id,
+                                    nome: e.target.value,
+                                    preco: adicionalForm.grupo_id === grupo.id ? adicionalForm.preco : ''
+                                  })}
+                                  placeholder="Ex.: Bacon extra"
+                                />
+                                <input
+                                  value={adicionalForm.grupo_id === grupo.id ? adicionalForm.preco : ''}
+                                  onChange={(e) => setAdicionalForm({
+                                    grupo_id: grupo.id,
+                                    nome: adicionalForm.grupo_id === grupo.id ? adicionalForm.nome : '',
+                                    preco: e.target.value
+                                  })}
+                                  placeholder="R$ 0,00"
+                                  inputMode="decimal"
+                                />
+                                <button type="button" className="botao-novo" onClick={(e) => criarAdicional(e, grupo.id)}>
+                                  <Plus size={15} /> Adicionar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    <div style={{ borderTop: '1px solid #243750', paddingTop: 14 }}>
+                      <strong style={{ display: 'block', marginBottom: 8, color: '#dfe8f5' }}>
+                        Criar novo grupo
+                      </strong>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px,1fr) auto 90px auto', gap: 8, alignItems: 'center' }}>
+                        <input
+                          value={grupoForm.nome}
+                          onChange={(e) => setGrupoForm({ ...grupoForm, nome: e.target.value })}
+                          placeholder="Ex.: Adicionais"
+                        />
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#c9d5e5', whiteSpace: 'nowrap' }}>
+                          <input
+                            type="checkbox"
+                            checked={grupoForm.obrigatorio}
+                            onChange={(e) => setGrupoForm({ ...grupoForm, obrigatorio: e.target.checked })}
+                          />
+                          Obrigatório
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={grupoForm.maximo}
+                          onChange={(e) => setGrupoForm({ ...grupoForm, maximo: e.target.value })}
+                          title="Máximo de escolhas"
+                        />
+                        <button type="button" className="botao-novo" onClick={criarGrupoNoProduto}>
+                          <Plus size={15} /> Criar
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </section>
+            </div>
+
+            <button className="primario" disabled={salvando}>
+              {salvando ? 'Salvando...' : 'Salvar produto'}
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
@@ -970,10 +4540,12 @@ function PainelConfiguracoes({ sessao }) {
   const [previewLogo, setPreviewLogo] = useState('')
   const [previewCapa, setPreviewCapa] = useState('')
   const [previewGif, setPreviewGif] = useState('')
+  const [tipoVisual, setTipoVisual] = useState('capa')
   const [carregando, setCarregando] = useState(true)
   const [salvando, setSalvando] = useState(false)
   const [mensagem, setMensagem] = useState('')
   const [erro, setErro] = useState('')
+  const [modelosAbertos, setModelosAbertos] = useState(false)
 
   useEffect(() => {
     async function carregarLoja() {
@@ -995,6 +4567,7 @@ function PainelConfiguracoes({ sessao }) {
         nome: estabelecimento.nome || '',
         descricao: estabelecimento.descricao || '',
         cor_principal: estabelecimento.cor_principal || '#0b5cff',
+        modelo_visual: estabelecimento.modelo_visual || 'kodvexa',
         tempo_medio_min: estabelecimento.tempo_medio_min ?? 40,
         taxa_entrega_base: String(estabelecimento.taxa_entrega_base ?? 0).replace('.', ','),
         aberto: estabelecimento.aberto ?? true,
@@ -1002,6 +4575,7 @@ function PainelConfiguracoes({ sessao }) {
       setPreviewLogo(estabelecimento.logo_url || '')
       setPreviewCapa(estabelecimento.capa_url || '')
       setPreviewGif(estabelecimento.fundo_gif_url || '')
+      setTipoVisual(estabelecimento.fundo_gif_url && !estabelecimento.capa_url ? 'gif' : 'capa')
       setCarregando(false)
     }
     carregarLoja()
@@ -1044,13 +4618,29 @@ function PainelConfiguracoes({ sessao }) {
     }
     setErro('')
     const preview = URL.createObjectURL(arquivo)
+
     if (ehGif) {
+      setTipoVisual('gif')
       setArquivoGif(arquivo)
       setPreviewGif(preview)
+      setArquivoCapa(null)
+      setPreviewCapa('')
     } else {
+      setTipoVisual('capa')
       setArquivoCapa(arquivo)
       setPreviewCapa(preview)
+      setArquivoGif(null)
+      setPreviewGif('')
     }
+  }
+
+  function removerVisualTopo() {
+    setArquivoCapa(null)
+    setArquivoGif(null)
+    setPreviewCapa('')
+    setPreviewGif('')
+    setMensagem('')
+    setErro('')
   }
 
   async function salvar(evento) {
@@ -1067,8 +4657,8 @@ function PainelConfiguracoes({ sessao }) {
 
     setSalvando(true)
     let logoUrl = loja.logo_url || null
-    let capaUrl = loja.capa_url || null
-    let fundoGifUrl = loja.fundo_gif_url || null
+    let capaUrl = tipoVisual === 'capa' ? (previewCapa ? loja.capa_url || null : null) : null
+    let fundoGifUrl = tipoVisual === 'gif' ? (previewGif ? loja.fundo_gif_url || null : null) : null
 
     if (arquivoLogo) {
       const extensao = arquivoLogo.name.split('.').pop().toLowerCase()
@@ -1096,8 +4686,20 @@ function PainelConfiguracoes({ sessao }) {
     }
 
     try {
-      if (arquivoCapa) capaUrl = await enviarVisual(arquivoCapa, 'capa')
-      if (arquivoGif) fundoGifUrl = await enviarVisual(arquivoGif, 'fundo')
+      if (tipoVisual === 'capa' && arquivoCapa) {
+        capaUrl = await enviarVisual(arquivoCapa, 'capa')
+        fundoGifUrl = null
+      }
+
+      if (tipoVisual === 'gif' && arquivoGif) {
+        fundoGifUrl = await enviarVisual(arquivoGif, 'fundo')
+        capaUrl = null
+      }
+
+      if (!previewCapa && !previewGif) {
+        capaUrl = null
+        fundoGifUrl = null
+      }
     } catch (erroUpload) {
       setErro(`Erro ao enviar imagem: ${erroUpload.message}`)
       setSalvando(false)
@@ -1107,10 +4709,10 @@ function PainelConfiguracoes({ sessao }) {
     const dados = {
       nome: form.nome.trim(),
       descricao: form.descricao.trim() || null,
-      cor_principal: form.cor_principal,
       tempo_medio_min: tempo,
       taxa_entrega_base: taxa,
       aberto: form.aberto,
+      modelo_visual: form.modelo_visual || 'kodvexa',
       logo_url: logoUrl,
       capa_url: capaUrl,
       fundo_gif_url: fundoGifUrl,
@@ -1134,6 +4736,7 @@ function PainelConfiguracoes({ sessao }) {
     setPreviewLogo(data.logo_url || '')
     setPreviewCapa(data.capa_url || '')
     setPreviewGif(data.fundo_gif_url || '')
+    setTipoVisual(data.fundo_gif_url && !data.capa_url ? 'gif' : 'capa')
     setMensagem('Configurações salvas com sucesso!')
   }
 
@@ -1149,52 +4752,1523 @@ function PainelConfiguracoes({ sessao }) {
           <div><span>CENTRAL DA LOJA</span><h2>Personalização e operação</h2><p>Gerencie a identidade e as informações públicas do seu estabelecimento.</p></div>
           <div className={`status-config ${form.aberto ? 'online' : ''}`}><i />{form.aberto ? 'Loja online' : 'Loja fechada'}</div>
         </div>
+        <style>{`
+          .config-pro {
+            gap: 22px !important;
+          }
+
+          .config-pro__titulo {
+            margin-bottom: 0 !important;
+          }
+
+          .config-pro__logo-linha {
+            display: grid;
+            grid-template-columns: 66px minmax(0,1fr) auto;
+            align-items: center;
+            gap: 14px;
+            padding: 14px;
+            border: 1px solid #233750;
+            border-radius: 16px;
+            background: #0b1726;
+          }
+
+          .config-pro__logo-preview {
+            width: 66px;
+            height: 66px;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            border: 1px solid #304760;
+            border-radius: 17px;
+            background: #07111d;
+            color: #7e95b3;
+          }
+
+          .config-pro__logo-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+          }
+
+          .config-pro__logo-texto {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+          }
+
+          .config-pro__logo-texto strong,
+          .config-pro__subtitulo strong {
+            color: #edf5ff;
+            font-size: .9rem;
+          }
+
+          .config-pro__logo-texto small,
+          .config-pro__subtitulo small {
+            color: #7f94ae;
+            font-size: .72rem;
+            line-height: 1.4;
+          }
+
+          .config-pro__acao {
+            min-height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 14px;
+            border: 1px solid #315a92;
+            border-radius: 11px;
+            background: #10233c;
+            color: #80adff;
+            font-size: .75rem;
+            font-weight: 900;
+            cursor: pointer;
+          }
+
+          .config-pro__acao input,
+          .config-pro__tipo-visual input {
+            display: none;
+          }
+
+          .config-pro__divisor {
+            height: 1px;
+            background: #20334b;
+          }
+
+          .config-pro__visual-topo {
+            display: grid;
+            gap: 12px;
+          }
+
+          .config-pro__subtitulo {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 12px;
+          }
+
+          .config-pro__subtitulo > div {
+            display: grid;
+            gap: 3px;
+          }
+
+          .config-pro__badge {
+            flex: 0 0 auto;
+            min-height: 27px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 9px;
+            border: 1px solid #2c4665;
+            border-radius: 999px;
+            background: #0c1b2d;
+            color: #83a7d6;
+            font-size: .64rem;
+            font-weight: 900;
+          }
+
+          .config-pro__tipo-visual {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+          }
+
+          .config-pro__tipo-visual label {
+            min-height: 66px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 13px;
+            border: 1px solid #263a54;
+            border-radius: 14px;
+            background: #0a1523;
+            color: #7590b2;
+            cursor: pointer;
+            transition: .18s ease;
+          }
+
+          .config-pro__tipo-visual label.ativo {
+            border-color: #3f7cff;
+            background: linear-gradient(145deg, #102644, #0c1d33);
+            color: #75a6ff;
+            box-shadow: 0 0 0 2px rgba(63,124,255,.10);
+          }
+
+          .config-pro__tipo-visual label > span {
+            display: grid;
+            gap: 2px;
+          }
+
+          .config-pro__tipo-visual strong {
+            color: #e6eef9;
+            font-size: .79rem;
+          }
+
+          .config-pro__tipo-visual small {
+            color: #748aa5;
+            font-size: .66rem;
+          }
+
+          .config-pro__visual-preview {
+            position: relative;
+            height: 220px;
+            overflow: hidden;
+            border: 1px solid #2a405c;
+            border-radius: 16px;
+            background:
+              linear-gradient(145deg, #081421, #0d1d30);
+          }
+
+          .config-pro__visual-preview > img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+          }
+
+          .config-pro__visual-vazio {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            color: #6581a5;
+          }
+
+          .config-pro__visual-vazio strong {
+            color: #cdd9e8;
+            font-size: .82rem;
+          }
+
+          .config-pro__visual-vazio small {
+            color: #7188a5;
+            font-size: .68rem;
+          }
+
+          .config-pro__remover {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            min-height: 34px;
+            padding: 0 10px;
+            border: 1px solid rgba(255,255,255,.18);
+            border-radius: 10px;
+            background: rgba(8,15,25,.72);
+            color: #d7e1ee;
+            font-size: .68rem;
+            font-weight: 850;
+            backdrop-filter: blur(8px);
+          }
+
+          .config-pro__modelo {
+            display: grid;
+            grid-template-columns: 42px minmax(0,1fr) auto;
+            align-items: center;
+            gap: 11px;
+            padding: 12px 13px;
+            border: 1px solid #22364e;
+            border-radius: 14px;
+            background: linear-gradient(145deg, #0a1725, #0d1c2e);
+          }
+
+          .config-pro__modelo-icone {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            border-radius: 12px;
+            background: #112845;
+            color: #79aaff;
+          }
+
+          .config-pro__modelo > div:nth-child(2) {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+          }
+
+          .config-pro__modelo strong {
+            color: #e8f0fb;
+            font-size: .78rem;
+          }
+
+          .config-pro__modelo small {
+            color: #748ba8;
+            font-size: .67rem;
+            line-height: 1.35;
+          }
+
+          .config-pro__modelo > span {
+            min-height: 25px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 8px;
+            border-radius: 999px;
+            background: #102b22;
+            color: #56d89b;
+            font-size: .6rem;
+            font-weight: 950;
+          }
+
+          .config-pro__campos {
+            display: grid;
+            gap: 14px;
+          }
+
+          .config-pro__campos textarea {
+            min-height: 86px !important;
+          }
+
+          .operacao-pro__grid {
+            display: grid;
+            grid-template-columns: 1.35fr .8fr .9fr;
+            gap: 10px;
+          }
+
+          .operacao-pro__status,
+          .operacao-pro__campo {
+            min-height: 88px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 13px;
+            border: 1px solid #253a54;
+            border-radius: 14px;
+            background: #0a1624;
+          }
+
+          .operacao-pro__status > span {
+            display: grid;
+            gap: 4px;
+          }
+
+          .operacao-pro__status strong {
+            color: #e8f0fb;
+            font-size: .79rem;
+          }
+
+          .operacao-pro__status small {
+            color: #758ba7;
+            font-size: .66rem;
+          }
+
+          .operacao-pro__campo {
+            display: grid;
+            align-content: center;
+            justify-content: stretch;
+            gap: 7px;
+          }
+
+          .operacao-pro__campo > span {
+            color: #8da0b8;
+            font-size: .68rem;
+            font-weight: 800;
+          }
+
+          .operacao-pro__campo > div {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+          }
+
+          .operacao-pro__campo input {
+            min-width: 0;
+            height: 42px !important;
+            padding: 0 10px !important;
+            border-radius: 10px !important;
+          }
+
+          .operacao-pro__campo b {
+            color: #7691b0;
+            font-size: .72rem;
+          }
+
+          .preview-config {
+            position: sticky;
+            top: 18px;
+            align-self: start;
+          }
+
+          @media (max-width: 900px) {
+            .config-pro__logo-linha {
+              grid-template-columns: 58px minmax(0,1fr);
+            }
+
+            .config-pro__acao {
+              grid-column: 1 / -1;
+              width: 100%;
+            }
+
+            .config-pro__tipo-visual,
+            .operacao-pro__grid {
+              grid-template-columns: 1fr;
+            }
+
+            .config-pro__visual-preview {
+              height: 180px;
+            }
+
+            .config-pro__modelo {
+              grid-template-columns: 40px minmax(0,1fr);
+            }
+
+            .config-pro__modelo > span {
+              grid-column: 2;
+              width: max-content;
+            }
+
+            .preview-config {
+              position: static;
+            }
+          }
+
+          .modelos-kodvexa {
+            display: grid;
+            gap: 12px;
+          }
+
+          .modelos-kodvexa__topo {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 12px;
+          }
+
+          .modelos-kodvexa__topo > div {
+            display: grid;
+            gap: 4px;
+          }
+
+          .modelos-kodvexa__topo strong {
+            color: #eaf2fd;
+            font-size: .9rem;
+          }
+
+          .modelos-kodvexa__topo small {
+            color: #7d92ad;
+            font-size: .7rem;
+          }
+
+          .modelos-kodvexa__topo > span {
+            flex: 0 0 auto;
+            min-height: 25px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 8px;
+            border-radius: 999px;
+            background: #10243c;
+            color: #77a9ff;
+            font-size: .58rem;
+            font-weight: 950;
+          }
+
+          .modelos-kodvexa__grade {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0,1fr));
+            gap: 10px;
+          }
+
+          .modelo-opcao {
+            position: relative;
+            display: grid;
+            gap: 10px;
+            min-width: 0;
+            padding: 9px;
+            border: 1px solid #273c56;
+            border-radius: 15px;
+            background: #091522;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+            transition: .18s ease;
+          }
+
+          .modelo-opcao:hover {
+            transform: translateY(-1px);
+            border-color: #38577c;
+          }
+
+          .modelo-opcao.ativo {
+            border-color: #3f7cff;
+            background: linear-gradient(145deg, #0d2038, #0a1828);
+            box-shadow: 0 0 0 2px rgba(63,124,255,.11);
+          }
+
+          .modelo-opcao__texto {
+            min-width: 0;
+            display: grid;
+            gap: 2px;
+          }
+
+          .modelo-opcao__texto strong {
+            color: #e8f1fc;
+            font-size: .75rem;
+          }
+
+          .modelo-opcao__texto small {
+            min-height: 30px;
+            color: #7288a4;
+            font-size: .62rem;
+            line-height: 1.35;
+          }
+
+          .modelo-opcao__check {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 22px;
+            height: 22px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: #0d1b2b;
+            color: #fff;
+            font-size: .72rem;
+            font-weight: 950;
+          }
+
+          .modelo-opcao.ativo .modelo-opcao__check {
+            background: #2870ff;
+          }
+
+          .modelo-mini {
+            position: relative;
+            height: 92px;
+            overflow: hidden;
+            border-radius: 11px;
+            background: #eef2f7;
+          }
+
+          .modelo-mini i,
+          .modelo-mini b,
+          .modelo-mini span {
+            position: absolute;
+            display: block;
+          }
+
+          .modelo-mini i:first-child {
+            top: 0;
+            right: 0;
+            left: 0;
+            height: 34px;
+            background: linear-gradient(135deg, #26384d, #0d1622);
+          }
+
+          .modelo-mini i:nth-child(2) {
+            top: 28px;
+            left: 9px;
+            width: 25px;
+            height: 25px;
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 3px 8px rgba(0,0,0,.12);
+          }
+
+          .modelo-mini b {
+            top: 42px;
+            right: 9px;
+            left: 9px;
+            height: 13px;
+            border-radius: 7px;
+            background: #fff;
+          }
+
+          .modelo-mini span:nth-of-type(1),
+          .modelo-mini span:nth-of-type(2) {
+            top: 63px;
+            width: calc(50% - 14px);
+            height: 20px;
+            border-radius: 7px;
+            background: #fff;
+          }
+
+          .modelo-mini span:nth-of-type(1) { left: 9px; }
+          .modelo-mini span:nth-of-type(2) { right: 9px; }
+
+          .modelo-mini.vitrine {
+            background: #f4f6fb;
+          }
+
+          .modelo-mini.vitrine i:first-child {
+            background: linear-gradient(135deg, #3a140b, #ce5b17);
+          }
+
+          .modelo-mini.vitrine span:nth-of-type(1),
+          .modelo-mini.vitrine span:nth-of-type(2) {
+            height: 24px;
+            background: linear-gradient(145deg, #fff, #f7e9df);
+          }
+
+          .modelo-mini.glass {
+            background: linear-gradient(145deg, #111a2b, #1a2940);
+          }
+
+          .modelo-mini.glass i:first-child {
+            background: linear-gradient(135deg, #0a1526, #263b59);
+          }
+
+          .modelo-mini.glass b,
+          .modelo-mini.glass span:nth-of-type(1),
+          .modelo-mini.glass span:nth-of-type(2) {
+            border: 1px solid rgba(255,255,255,.16);
+            background: rgba(255,255,255,.13);
+            backdrop-filter: blur(5px);
+          }
+
+          .preview-modelo-vitrine .celular-preview__conteudo {
+            background: linear-gradient(180deg, #fff8f2, #f7f1eb) !important;
+          }
+
+          .preview-modelo-vitrine .celular-preview__produto {
+            border-color: #efd8c5 !important;
+            border-radius: 15px !important;
+            box-shadow: 0 7px 18px rgba(88,47,21,.07) !important;
+          }
+
+          .preview-modelo-glass .celular-preview__conteudo {
+            background: linear-gradient(180deg, #eef4fb, #e7eef7) !important;
+          }
+
+          .preview-modelo-glass .celular-preview__produto {
+            border-color: rgba(140,162,190,.32) !important;
+            background: rgba(255,255,255,.78) !important;
+            box-shadow: 0 8px 20px rgba(38,58,83,.09) !important;
+            backdrop-filter: blur(8px);
+          }
+
+          @media (max-width: 900px) {
+            .modelos-kodvexa__grade {
+              grid-template-columns: 1fr;
+            }
+
+            .modelo-opcao {
+              grid-template-columns: 118px minmax(0,1fr);
+              align-items: center;
+            }
+
+            .modelo-mini {
+              height: 78px;
+            }
+
+            .modelo-opcao__texto small {
+              min-height: 0;
+            }
+          }
+
+
+          /* MODELOS FOOD - seletor visual grande */
+          .modelos-food {
+            margin-top: 2px;
+          }
+
+          .modelos-food__grade {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+          }
+
+          .food-modelo-card {
+            position: relative;
+            overflow: hidden;
+            display: grid;
+            gap: 0;
+            padding: 0;
+            border: 1px solid #263d59;
+            border-radius: 17px;
+            background: #081421;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+            transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+          }
+
+          .food-modelo-card:hover {
+            transform: translateY(-2px);
+            border-color: #3b5d85;
+          }
+
+          .food-modelo-card.ativo {
+            border-color: #3f7cff;
+            box-shadow:
+              0 0 0 2px rgba(63,124,255,.12),
+              0 14px 28px rgba(3,12,24,.20);
+          }
+
+          .food-mini {
+            position: relative;
+            height: 172px;
+            overflow: hidden;
+            background: #eef3f8;
+          }
+
+          .food-mini__hero {
+            position: relative;
+            height: 68px;
+            overflow: hidden;
+          }
+
+          .food-mini__logo {
+            position: absolute;
+            left: 10px;
+            bottom: 9px;
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            background: rgba(255,255,255,.92);
+            box-shadow: 0 4px 9px rgba(0,0,0,.12);
+          }
+
+          .food-mini__nome {
+            position: absolute;
+            left: 46px;
+            bottom: 27px;
+            width: 84px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(255,255,255,.90);
+          }
+
+          .food-mini__status {
+            position: absolute;
+            left: 46px;
+            bottom: 10px;
+            width: 48px;
+            height: 9px;
+            border-radius: 999px;
+            background: rgba(93,225,150,.92);
+          }
+
+          .food-mini__search {
+            height: 24px;
+            margin: 8px 10px 6px;
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 2px 7px rgba(20,34,51,.06);
+          }
+
+          .food-mini__cats {
+            display: flex;
+            gap: 5px;
+            margin: 0 10px 7px;
+          }
+
+          .food-mini__cats i {
+            width: 42px;
+            height: 13px;
+            border-radius: 999px;
+            background: #fff;
+          }
+
+          .food-mini__cards {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 7px;
+            margin: 0 10px;
+          }
+
+          .food-mini__cards span {
+            height: 45px;
+            border-radius: 9px;
+            background: #fff;
+            box-shadow: 0 3px 9px rgba(20,34,51,.06);
+          }
+
+          .food-mini.burger-house {
+            background: #17100d;
+          }
+
+          .food-mini.burger-house .food-mini__hero {
+            background:
+              radial-gradient(circle at 72% 40%, rgba(255,118,39,.45), transparent 28%),
+              linear-gradient(135deg, #160a07, #5b1f0b 58%, #17100d);
+          }
+
+          .food-mini.burger-house .food-mini__search,
+          .food-mini.burger-house .food-mini__cats i,
+          .food-mini.burger-house .food-mini__cards span {
+            background: #241813;
+            border: 1px solid rgba(255,124,44,.18);
+          }
+
+          .food-mini.burger-house .food-mini__cats i:first-child {
+            background: #ff6a1a;
+          }
+
+          .food-mini.gourmet {
+            background: #f5efe6;
+          }
+
+          .food-mini.gourmet .food-mini__hero {
+            background:
+              linear-gradient(90deg, rgba(62,48,35,.58), rgba(62,48,35,.08)),
+              linear-gradient(135deg, #d7c2a2, #7a6248);
+          }
+
+          .food-mini.gourmet .food-mini__search,
+          .food-mini.gourmet .food-mini__cats i,
+          .food-mini.gourmet .food-mini__cards span {
+            background: #fffdf9;
+            border: 1px solid #e6d8c8;
+          }
+
+          .food-mini.gourmet .food-mini__cats i:first-child {
+            background: #8a6b46;
+          }
+
+          .food-mini.fast-food {
+            background: #fff7ef;
+          }
+
+          .food-mini.fast-food .food-mini__hero {
+            background:
+              radial-gradient(circle at 75% 30%, rgba(255,221,92,.55), transparent 25%),
+              linear-gradient(135deg, #ff4928, #ff8b1f);
+          }
+
+          .food-mini.fast-food .food-mini__cats i:first-child {
+            background: #ff4d24;
+          }
+
+          .food-mini.fast-food .food-mini__cards span {
+            box-shadow: 0 5px 12px rgba(255,84,33,.10);
+          }
+
+          .food-mini.night-food {
+            background:
+              radial-gradient(circle at 50% 0%, rgba(61,90,160,.20), transparent 46%),
+              #0b1120;
+          }
+
+          .food-mini.night-food .food-mini__hero {
+            background:
+              linear-gradient(135deg, rgba(36,57,100,.80), rgba(12,18,33,.92));
+          }
+
+          .food-mini.night-food .food-mini__search,
+          .food-mini.night-food .food-mini__cats i,
+          .food-mini.night-food .food-mini__cards span {
+            border: 1px solid rgba(111,139,206,.20);
+            background: rgba(255,255,255,.09);
+            backdrop-filter: blur(6px);
+          }
+
+          .food-mini.night-food .food-mini__cats i:first-child {
+            background: #5c6cff;
+            box-shadow: 0 0 10px rgba(92,108,255,.35);
+          }
+
+          .food-mini.clean-food {
+            background: #f7f9fc;
+          }
+
+          .food-mini.clean-food .food-mini__hero {
+            background: linear-gradient(135deg, #dce4ee, #aebdcd);
+          }
+
+          .food-mini.clean-food .food-mini__cards span {
+            border: 1px solid #e5eaf0;
+            box-shadow: none;
+          }
+
+          .food-modelo-card__info {
+            display: grid;
+            gap: 6px;
+            padding: 12px 13px 10px;
+            border-top: 1px solid #20344c;
+          }
+
+          .food-modelo-card__info > div {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+          }
+
+          .food-modelo-card__info strong {
+            color: #edf5ff;
+            font-size: .82rem;
+          }
+
+          .food-modelo-card__info span {
+            min-height: 22px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 7px;
+            border-radius: 999px;
+            background: #10243c;
+            color: #78a9ff;
+            font-size: .52rem;
+            font-weight: 950;
+            letter-spacing: .03em;
+          }
+
+          .food-modelo-card__info small {
+            min-height: 34px;
+            color: #7188a4;
+            font-size: .65rem;
+            line-height: 1.4;
+          }
+
+          .food-modelo-card__rodape {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            min-height: 42px;
+            padding: 0 13px;
+            border-top: 1px solid #20344c;
+            background: #0a1725;
+            color: #8ba0ba;
+            font-size: .66rem;
+            font-weight: 850;
+          }
+
+          .food-modelo-card__rodape b {
+            width: 25px;
+            height: 25px;
+            display: grid;
+            place-items: center;
+            border-radius: 8px;
+            background: #112640;
+            color: #7ba9f8;
+          }
+
+          .food-modelo-card.ativo .food-modelo-card__rodape {
+            color: #83aeff;
+          }
+
+          .food-modelo-card.ativo .food-modelo-card__rodape b {
+            background: #2870ff;
+            color: #fff;
+          }
+
+          @media (max-width: 900px) {
+            .modelos-food__grade {
+              grid-template-columns: 1fr;
+            }
+
+            .food-modelo-card {
+              grid-template-columns: 126px minmax(0,1fr);
+              grid-template-rows: auto auto;
+            }
+
+            .food-mini {
+              grid-row: 1 / 3;
+              height: 136px;
+              border-right: 1px solid #20344c;
+            }
+
+            .food-modelo-card__info {
+              border-top: 0;
+            }
+          }
+
+
+          .modelos-accordion {
+            overflow: hidden;
+            border: 1px solid #253a54;
+            border-radius: 16px;
+            background: #091522;
+          }
+
+          .modelos-accordion__cabecalho {
+            width: 100%;
+            min-height: 82px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 16px;
+            border: 0;
+            background: linear-gradient(145deg, #0b1827, #0d1d30);
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+          }
+
+          .modelos-accordion__cabecalho.aberto {
+            border-bottom: 1px solid #253a54;
+          }
+
+          .modelos-accordion__cabecalho > div:first-child {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+          }
+
+          .modelos-accordion__cabecalho span {
+            color: #6f9ce5;
+            font-size: .58rem;
+            font-weight: 950;
+            letter-spacing: .11em;
+          }
+
+          .modelos-accordion__cabecalho strong {
+            color: #edf5ff;
+            font-size: .92rem;
+          }
+
+          .modelos-accordion__cabecalho small {
+            color: #768ca7;
+            font-size: .68rem;
+          }
+
+          .modelos-accordion__acao {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            flex: 0 0 auto;
+          }
+
+          .modelos-accordion__acao b {
+            color: #83aef6;
+            font-size: .7rem;
+          }
+
+          .modelos-accordion__acao i {
+            width: 34px;
+            height: 34px;
+            display: grid;
+            place-items: center;
+            border: 1px solid #2b4564;
+            border-radius: 10px;
+            background: #10223a;
+            color: #8bb4ff;
+            font-size: 1.1rem;
+            font-style: normal;
+          }
+
+          .modelos-accordion__conteudo {
+            display: grid;
+            gap: 13px;
+            padding: 14px;
+            background: #07121e;
+          }
+
+          .modelos-accordion__aviso {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 11px 12px;
+            border: 1px solid #203750;
+            border-radius: 13px;
+            background: #0a1827;
+          }
+
+          .modelos-accordion__aviso > div {
+            display: grid;
+            gap: 3px;
+          }
+
+          .modelos-accordion__aviso strong {
+            color: #dfeaf8;
+            font-size: .76rem;
+          }
+
+          .modelos-accordion__aviso small {
+            color: #748aa5;
+            font-size: .64rem;
+            line-height: 1.35;
+          }
+
+          .modelos-accordion__aviso button {
+            flex: 0 0 auto;
+            min-height: 36px;
+            padding: 0 10px;
+            border: 1px solid #315989;
+            border-radius: 10px;
+            background: #10243b;
+            color: #82adf4;
+            font-size: .64rem;
+            font-weight: 900;
+          }
+
+          .food-mini.kodvexa {
+            background: linear-gradient(180deg, #edf3fa, #f7f9fc);
+          }
+
+          .food-mini.kodvexa .food-mini__hero {
+            background:
+              radial-gradient(circle at 82% 22%, rgba(61,106,180,.32), transparent 28%),
+              linear-gradient(135deg, #0d1a2c, #314a6d);
+          }
+
+          .food-mini.kodvexa .food-mini__search,
+          .food-mini.kodvexa .food-mini__cats i,
+          .food-mini.kodvexa .food-mini__cards span {
+            border: 1px solid #dde5ef;
+            background: #fff;
+          }
+
+          .food-mini.kodvexa .food-mini__cats i:first-child {
+            background: #4c35f3;
+          }
+
+          .food-mini.marmitaria {
+            background: linear-gradient(180deg, #fff8ef, #fffdf9);
+          }
+
+          .food-mini.marmitaria .food-mini__hero {
+            background:
+              radial-gradient(circle at 78% 28%, rgba(255,196,109,.34), transparent 27%),
+              linear-gradient(135deg, #7b2f18, #d46a2e);
+          }
+
+          .food-mini.marmitaria .food-mini__search,
+          .food-mini.marmitaria .food-mini__cats i,
+          .food-mini.marmitaria .food-mini__cards span {
+            border: 1px solid #f0dfcf;
+            background: #fff;
+          }
+
+          .food-mini.marmitaria .food-mini__cats i:first-child {
+            background: #c95526;
+          }
+
+          .preview-modelo-marmitaria .celular-preview__conteudo {
+            background: linear-gradient(180deg, #fff9f2, #f8f0e7) !important;
+          }
+
+          .preview-modelo-marmitaria .preview-busca,
+          .preview-modelo-marmitaria .preview-produto,
+          .preview-modelo-marmitaria .preview-categorias span {
+            border-color: #ead8c7 !important;
+            background: #fffdf9 !important;
+          }
+
+          .preview-modelo-marmitaria .preview-categorias span:first-child {
+            background: #b94d25 !important;
+            color: #fff !important;
+            border-color: #b94d25 !important;
+          }
+
+          .preview-modelo-marmitaria .preview-produto {
+            border-radius: 15px !important;
+            box-shadow: 0 5px 14px rgba(108,55,29,.08) !important;
+          }
+
+          .preview-modelo-marmitaria .preview-produto strong {
+            color: #a94320 !important;
+          }
+
+          /* Prévia ao vivo: muda imediatamente ao selecionar o modelo */
+          .preview-modelo-kodvexa .celular-preview__conteudo {
+            background: linear-gradient(180deg, #f4f7fb, #edf2f7) !important;
+          }
+
+          .preview-modelo-kodvexa .preview-produto {
+            border-radius: 13px !important;
+            background: #fff !important;
+            border-color: #dfe6ef !important;
+          }
+
+          .preview-modelo-burger-house .celular-preview__conteudo {
+            background: linear-gradient(180deg, #17110e, #21150f) !important;
+            color: #fff !important;
+          }
+
+          .preview-modelo-burger-house .preview-busca,
+          .preview-modelo-burger-house .preview-produto,
+          .preview-modelo-burger-house .preview-categorias span {
+            border-color: rgba(255,124,44,.18) !important;
+            background: #281a14 !important;
+            color: #f5e8df !important;
+          }
+
+          .preview-modelo-burger-house .preview-produto span {
+            color: #b69b8d !important;
+          }
+
+          .preview-modelo-burger-house .preview-produto strong {
+            color: #ff7a2a !important;
+          }
+
+          .preview-modelo-gourmet .celular-preview__conteudo {
+            background: linear-gradient(180deg, #fbf7f1, #f3ece3) !important;
+          }
+
+          .preview-modelo-gourmet .preview-busca,
+          .preview-modelo-gourmet .preview-produto,
+          .preview-modelo-gourmet .preview-categorias span {
+            border-color: #e6dacb !important;
+            background: #fffdf9 !important;
+          }
+
+          .preview-modelo-gourmet .preview-produto strong {
+            color: #7b5d3d !important;
+          }
+
+          .preview-modelo-fast-food .celular-preview__conteudo {
+            background: linear-gradient(180deg, #fffaf5, #fff1e5) !important;
+          }
+
+          .preview-modelo-fast-food .preview-busca,
+          .preview-modelo-fast-food .preview-produto {
+            border-color: #ffdfcc !important;
+            border-radius: 15px !important;
+            background: #fff !important;
+            box-shadow: 0 5px 12px rgba(255,80,35,.08) !important;
+          }
+
+          .preview-modelo-fast-food .preview-categorias span:first-child {
+            background: #ff5426 !important;
+            color: #fff !important;
+            border-color: #ff5426 !important;
+          }
+
+          .preview-modelo-fast-food .preview-produto strong {
+            color: #ef421e !important;
+          }
+
+          .preview-modelo-night-food .celular-preview__conteudo {
+            background:
+              radial-gradient(circle at 50% 0%, rgba(76,98,170,.16), transparent 30%),
+              #0d1524 !important;
+            color: #f4f7ff !important;
+          }
+
+          .preview-modelo-night-food .preview-busca,
+          .preview-modelo-night-food .preview-produto,
+          .preview-modelo-night-food .preview-categorias span {
+            border-color: rgba(122,145,211,.20) !important;
+            background: rgba(255,255,255,.08) !important;
+            color: #d5ddef !important;
+            backdrop-filter: blur(8px);
+          }
+
+          .preview-modelo-night-food .preview-produto span {
+            color: #8e9ebb !important;
+          }
+
+          .preview-modelo-night-food .preview-produto strong {
+            color: #8d97ff !important;
+          }
+
+          .preview-modelo-clean-food .celular-preview__conteudo {
+            background: #f7f9fc !important;
+          }
+
+          .preview-modelo-clean-food .preview-busca,
+          .preview-modelo-clean-food .preview-produto,
+          .preview-modelo-clean-food .preview-categorias span {
+            border-color: #e5eaf0 !important;
+            background: #fff !important;
+            box-shadow: none !important;
+          }
+
+          .preview-modelo-clean-food .preview-produto strong {
+            color: #111827 !important;
+          }
+
+          @media (max-width: 900px) {
+            .modelos-accordion__cabecalho {
+              align-items: flex-start;
+            }
+
+            .modelos-accordion__acao b {
+              display: none;
+            }
+
+            .modelos-accordion__aviso {
+              align-items: stretch;
+              flex-direction: column;
+            }
+
+            .modelos-accordion__aviso button {
+              width: 100%;
+            }
+          }
+
+        `}</style>
         <form className="form-config" onSubmit={salvar}>
-          <section className="cartao-config identidade-config">
-            <div className="titulo-bloco-config"><span>APARÊNCIA</span><h3>Identidade da loja</h3><p>Crie um cardápio com a personalidade do estabelecimento.</p></div>
-            <label className="logo-config">
-              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={escolherLogo} />
-              <div>{previewLogo ? <img src={previewLogo} alt="Logo da loja" /> : <Store />}</div>
-              <span><strong>Alterar logo</strong><small>JPG, PNG ou WEBP · até 5 MB</small></span>
-            </label>
-            <div className="midias-config">
-              <label className="midia-config">
-                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => escolherVisual(e, 'capa')} />
-                <span>Foto de capa</span>
-                <div>{previewCapa ? <img src={previewCapa} alt="Prévia da capa" /> : <><Store /><small>Adicionar capa</small></>}</div>
-                <small>JPG, PNG ou WEBP · até 5 MB</small>
-              </label>
-              <label className="midia-config gif-config">
-                <input type="file" accept="image/gif" onChange={(e) => escolherVisual(e, 'gif')} />
-                <span>GIF de fundo</span>
-                <div>{previewGif ? <img src={previewGif} alt="Prévia do GIF" /> : <><RefreshCw /><small>Adicionar GIF</small></>}</div>
-                <small>GIF animado · até 10 MB</small>
+          <section className="cartao-config identidade-config config-pro">
+            <div className="titulo-bloco-config config-pro__titulo">
+              <span>APARÊNCIA</span>
+              <h3>Identidade da loja</h3>
+              <p>Atualize a marca e o visual que o cliente vê no cardápio.</p>
+            </div>
+
+            <div className="config-pro__logo-linha">
+              <div className="config-pro__logo-preview">
+                {previewLogo ? <img src={previewLogo} alt="Logo da loja" /> : <Store size={28} />}
+              </div>
+
+              <div className="config-pro__logo-texto">
+                <strong>Logo da loja</strong>
+                <small>Use uma imagem quadrada para ficar melhor no cardápio.</small>
+              </div>
+
+              <label className="config-pro__acao">
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={escolherLogo} />
+                Alterar logo
               </label>
             </div>
-            <label>Nome da loja<input value={form.nome} onChange={(e) => alterar('nome', e.target.value)} /></label>
-            <label>Descrição<textarea value={form.descricao} onChange={(e) => alterar('descricao', e.target.value)} placeholder="Ex.: Hambúrgueres artesanais, porções e bebidas." /></label>
-            <label>Cor principal<div className="seletor-cor"><input type="color" value={form.cor_principal} onChange={(e) => alterar('cor_principal', e.target.value)} /><input value={form.cor_principal} onChange={(e) => alterar('cor_principal', e.target.value)} /></div></label>
+
+            <div className="config-pro__divisor" />
+
+            <div className="config-pro__visual-topo">
+              <div className="config-pro__subtitulo">
+                <div>
+                  <strong>Visual do topo</strong>
+                  <small>Escolha foto ou GIF. Apenas um fica ativo por vez.</small>
+                </div>
+
+                <span className="config-pro__badge">
+                  {tipoVisual === 'gif' && previewGif ? 'GIF ativo' : tipoVisual === 'capa' && previewCapa ? 'Foto ativa' : 'Sem visual'}
+                </span>
+              </div>
+
+              <div className="config-pro__tipo-visual">
+                <label className={tipoVisual === 'capa' ? 'ativo' : ''}>
+                  <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => escolherVisual(e, 'capa')} />
+                  <Store size={18} />
+                  <span><strong>Foto de capa</strong><small>JPG, PNG ou WEBP</small></span>
+                </label>
+
+                <label className={tipoVisual === 'gif' ? 'ativo' : ''}>
+                  <input type="file" accept="image/gif" onChange={(e) => escolherVisual(e, 'gif')} />
+                  <RefreshCw size={18} />
+                  <span><strong>GIF animado</strong><small>Até 10 MB</small></span>
+                </label>
+              </div>
+
+              <div className="config-pro__visual-preview">
+                {(tipoVisual === 'gif' ? previewGif : previewCapa) ? (
+                  <img
+                    src={tipoVisual === 'gif' ? previewGif : previewCapa}
+                    alt={tipoVisual === 'gif' ? 'Prévia do GIF' : 'Prévia da capa'}
+                  />
+                ) : (
+                  <div className="config-pro__visual-vazio">
+                    {tipoVisual === 'gif' ? <RefreshCw size={28} /> : <Store size={28} />}
+                    <strong>Nenhum visual selecionado</strong>
+                    <small>Escolha uma opção acima para visualizar aqui.</small>
+                  </div>
+                )}
+
+                {(previewCapa || previewGif) && (
+                  <button type="button" className="config-pro__remover" onClick={removerVisualTopo}>
+                    Remover
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="modelos-accordion">
+              <button
+                type="button"
+                className={`modelos-accordion__cabecalho ${modelosAbertos ? 'aberto' : ''}`}
+                onClick={() => setModelosAbertos((valor) => !valor)}
+              >
+                <div>
+                  <span>MODELOS VISUAIS</span>
+                  <strong>
+                    {form.modelo_visual === 'burger-house' ? 'Burger House' :
+                     form.modelo_visual === 'gourmet' ? 'Gourmet' :
+                     form.modelo_visual === 'fast-food' ? 'Fast Food' :
+                     form.modelo_visual === 'night-food' ? 'Night Food' :
+                     form.modelo_visual === 'clean-food' ? 'Clean Food' :
+                     form.modelo_visual === 'marmitaria' ? 'Marmitaria & Frango' :
+                     'Padrão KODVEXA'}
+                  </strong>
+                  <small>Escolha um modelo pronto ou volte ao visual original da KODVEXA.</small>
+                </div>
+
+                <div className="modelos-accordion__acao">
+                  <b>{modelosAbertos ? 'Fechar' : 'Ver modelos'}</b>
+                  <i>{modelosAbertos ? '−' : '+'}</i>
+                </div>
+              </button>
+
+              {modelosAbertos && (
+                <div className="modelos-accordion__conteudo">
+                  <div className="modelos-accordion__aviso">
+                    <div>
+                      <strong>Modelos KODVEXA Food</strong>
+                      <small>A escolha muda o visual imediatamente na prévia ao lado. Só será aplicada para os clientes depois de salvar.</small>
+                    </div>
+
+                    {form.modelo_visual !== 'kodvexa' && (
+                      <button type="button" onClick={() => alterar('modelo_visual', 'kodvexa')}>
+                        Voltar ao padrão KODVEXA
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="modelos-food__grade">
+                    {[
+                      {
+                        id: 'kodvexa',
+                        nome: 'Padrão KODVEXA',
+                        descricao: 'O visual oficial do Food. Equilibrado, moderno e pensado para funcionar em qualquer loja.',
+                        tag: 'RECOMENDADO',
+                        classe: 'food-mini kodvexa',
+                      },
+                      {
+                        id: 'burger-house',
+                        nome: 'Burger House',
+                        descricao: 'Escuro, quente e forte para lanches, combos e hamburguerias.',
+                        tag: 'MAIS IMPACTO',
+                        classe: 'food-mini burger-house',
+                      },
+                      {
+                        id: 'gourmet',
+                        nome: 'Gourmet',
+                        descricao: 'Elegante e claro para almoço, massas, carnes e restaurantes.',
+                        tag: 'ELEGANTE',
+                        classe: 'food-mini gourmet',
+                      },
+                      {
+                        id: 'fast-food',
+                        nome: 'Fast Food',
+                        descricao: 'Claro, energético e comercial para vender rápido no mobile.',
+                        tag: 'VENDE RÁPIDO',
+                        classe: 'food-mini fast-food',
+                      },
+                      {
+                        id: 'night-food',
+                        nome: 'Night Food',
+                        descricao: 'Grafite, vidro e luz para delivery noturno e combos.',
+                        tag: 'NOTURNO',
+                        classe: 'food-mini night-food',
+                      },
+                      {
+                        id: 'clean-food',
+                        nome: 'Clean Food',
+                        descricao: 'Minimalista, leve e premium para destacar fotos e produtos.',
+                        tag: 'CLEAN',
+                        classe: 'food-mini clean-food',
+                      },
+                      {
+                        id: 'marmitaria',
+                        nome: 'Marmitaria & Frango',
+                        descricao: 'Feito para marmitas, frango assado, almoço do dia e acompanhamentos.',
+                        tag: 'ALMOÇO',
+                        classe: 'food-mini marmitaria',
+                      },
+                    ].map((modelo) => (
+                      <button
+                        type="button"
+                        key={modelo.id}
+                        className={`food-modelo-card ${form.modelo_visual === modelo.id ? 'ativo' : ''}`}
+                        onClick={() => alterar('modelo_visual', modelo.id)}
+                      >
+                        <div className={modelo.classe}>
+                          <div className="food-mini__hero">
+                            <i className="food-mini__logo" />
+                            <div className="food-mini__nome" />
+                            <div className="food-mini__status" />
+                          </div>
+                          <div className="food-mini__search" />
+                          <div className="food-mini__cats"><i /><i /><i /></div>
+                          <div className="food-mini__cards"><span /><span /></div>
+                        </div>
+
+                        <div className="food-modelo-card__info">
+                          <div>
+                            <strong>{modelo.nome}</strong>
+                            <span>{modelo.tag}</span>
+                          </div>
+                          <small>{modelo.descricao}</small>
+                        </div>
+
+                        <div className="food-modelo-card__rodape">
+                          <span>{form.modelo_visual === modelo.id ? 'Selecionado' : 'Usar este modelo'}</span>
+                          <b>{form.modelo_visual === modelo.id ? '✓' : '→'}</b>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="config-pro__campos">
+              <label>Nome da loja
+                <input value={form.nome} onChange={(e) => alterar('nome', e.target.value)} />
+              </label>
+
+              <label>Descrição
+                <textarea
+                  value={form.descricao}
+                  onChange={(e) => alterar('descricao', e.target.value)}
+                  placeholder="Ex.: Hambúrgueres artesanais, porções e bebidas."
+                />
+              </label>
+            </div>
           </section>
 
-          <section className="cartao-config operacao-config">
-            <div className="titulo-bloco-config"><span>OPERAÇÃO</span><h3>Entrega e funcionamento</h3><p>Controle as informações usadas durante o pedido.</p></div>
-            <label className="linha-interruptor"><span><strong>Loja aberta</strong><small>Permite mostrar “Aberto agora” no cardápio.</small></span><input type="checkbox" checked={form.aberto} onChange={(e) => alterar('aberto', e.target.checked)} /></label>
-            <label>Tempo médio de entrega (minutos)<input type="number" min="1" value={form.tempo_medio_min} onChange={(e) => alterar('tempo_medio_min', e.target.value)} /></label>
-            <label>Taxa de entrega (R$)<input value={form.taxa_entrega_base} onChange={(e) => alterar('taxa_entrega_base', e.target.value)} inputMode="decimal" placeholder="0,00" /></label>
+          <section className="cartao-config operacao-config config-pro operacao-pro">
+            <div className="titulo-bloco-config config-pro__titulo">
+              <span>OPERAÇÃO</span>
+              <h3>Entrega e funcionamento</h3>
+              <p>Defina as informações que aparecem durante o pedido.</p>
+            </div>
+
+            <div className="operacao-pro__grid">
+              <label className="operacao-pro__status">
+                <span>
+                  <strong>Status da loja</strong>
+                  <small>{form.aberto ? 'Clientes podem fazer pedidos agora.' : 'A loja aparece como fechada.'}</small>
+                </span>
+                <input type="checkbox" checked={form.aberto} onChange={(e) => alterar('aberto', e.target.checked)} />
+              </label>
+
+              <label className="operacao-pro__campo">
+                <span>Tempo médio</span>
+                <div><input type="number" min="1" value={form.tempo_medio_min} onChange={(e) => alterar('tempo_medio_min', e.target.value)} /><b>min</b></div>
+              </label>
+
+              <label className="operacao-pro__campo">
+                <span>Taxa base de entrega</span>
+                <div><b>R$</b><input value={form.taxa_entrega_base} onChange={(e) => alterar('taxa_entrega_base', e.target.value)} inputMode="decimal" placeholder="0,00" /></div>
+              </label>
+            </div>
           </section>
 
           <aside className="preview-config" style={{ '--preview-cor': form.cor_principal || '#0b5cff' }}>
-            <div className="preview-config__topo"><div><span>PRÉVIA AO VIVO</span><strong>Visão do cliente</strong></div><i /></div>
-            <div className="celular-preview">
+            <div className="preview-config__topo">
+              <div>
+                <span>PRÉVIA AO VIVO</span>
+                <strong>
+                  {form.modelo_visual === 'burger-house' ? 'Burger House' :
+                   form.modelo_visual === 'gourmet' ? 'Gourmet' :
+                   form.modelo_visual === 'fast-food' ? 'Fast Food' :
+                   form.modelo_visual === 'night-food' ? 'Night Food' :
+                   form.modelo_visual === 'clean-food' ? 'Clean Food' :
+                   form.modelo_visual === 'marmitaria' ? 'Marmitaria & Frango' :
+                   'Padrão KODVEXA'}
+                </strong>
+              </div>
+              <i />
+            </div>
+            <div className={`celular-preview preview-modelo-${form.modelo_visual || 'kodvexa'}`}>
               <div className="celular-preview__barra"><i /><i /><i /></div>
-              <div className="celular-preview__capa" style={previewCapa ? { backgroundImage: `url("${previewCapa}")` } : undefined}>
+              <div
+                className="celular-preview__capa"
+                style={tipoVisual === 'capa' && previewCapa ? { backgroundImage: `url("${previewCapa}")` } : undefined}
+              >
+                {tipoVisual === 'gif' && previewGif && (
+                  <img
+                    src={previewGif}
+                    alt=""
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                    }}
+                  />
+                )}
                 <div className="celular-preview__sombra" />
                 <div className="celular-preview__loja">
                   <div className="celular-preview__logo">{previewLogo ? <img src={previewLogo} alt="" /> : <Store />}</div>
                   <div><span>{form.aberto ? 'ABERTO AGORA' : 'FECHADO'}</span><h3>{form.nome || 'Nome da loja'}</h3><p>{form.descricao || 'Descrição do estabelecimento'}</p></div>
                 </div>
               </div>
-              <div className="celular-preview__conteudo" style={previewGif ? { backgroundImage: `linear-gradient(rgba(246,248,252,.92), rgba(246,248,252,.94)), url("${previewGif}")` } : undefined}>
+              <div className="celular-preview__conteudo">
                 <div className="preview-busca"><Search /><span>Buscar no cardápio</span></div>
                 <div className="preview-categorias"><span>Lanches</span><span>Bebidas</span></div>
                 <strong>Mais pedidos</strong>
@@ -1220,6 +6294,7 @@ function PainelRestaurante({ sessao }) {
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
   const [filtro, setFiltro] = useState('novos')
+  const [buscaPedidos, setBuscaPedidos] = useState('')
   const [pedidosChamando, setPedidosChamando] = useState([])
   const [alertasAtivos, setAlertasAtivos] = useState(() => localStorage.getItem('kodvexa_alertas_pedidos') === '1')
   const pedidosConhecidos = useRef(new Set())
@@ -1567,7 +6642,13 @@ function PainelRestaurante({ sessao }) {
   ]
 
   const abaAtual = abasFluxo.find((aba) => aba.id === filtro) || abasFluxo[0]
-  const exibidos = pedidos.filter((pedido) => abaAtual.status.includes(pedido.status))
+  const termoBuscaPedidos = buscaPedidos.trim().toLowerCase()
+  const exibidos = pedidos.filter((pedido) => {
+    if (!abaAtual.status.includes(pedido.status)) return false
+    if (!termoBuscaPedidos) return true
+    const textoPedido = `${pedido.numero || ''} ${pedido.cliente_nome || ''} ${pedido.cliente_telefone || ''}`.toLowerCase()
+    return textoPedido.includes(termoBuscaPedidos)
+  })
   const exibidosOrdenados = filtro === 'prontos'
     ? [...exibidos].sort((a, b) => {
         const tipoA = a.tipo_entrega === 'entrega' ? 0 : 1
@@ -1579,6 +6660,20 @@ function PainelRestaurante({ sessao }) {
   const prontosEntrega = filtro === 'prontos' ? exibidos.filter((pedido) => pedido.tipo_entrega === 'entrega').length : 0
   const prontosRetirada = filtro === 'prontos' ? exibidos.filter((pedido) => pedido.tipo_entrega !== 'entrega').length : 0
   const quantidadeAba = (aba) => pedidos.filter((pedido) => aba.status.includes(pedido.status)).length
+
+  const hoje = new Date()
+  const chaveHoje = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`
+  const pedidosHoje = pedidos.filter((pedido) => {
+    if (!pedido.criado_em || pedido.status === 'cancelado') return false
+    const data = new Date(pedido.criado_em)
+    if (Number.isNaN(data.getTime())) return false
+    const chavePedido = `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}`
+    return chavePedido === chaveHoje
+  })
+  const faturamentoHoje = pedidosHoje.reduce((soma, pedido) => soma + Number(pedido.total || 0), 0)
+  const entregasHoje = pedidosHoje.filter((pedido) => pedido.tipo_entrega === 'entrega').length
+  const retiradasHoje = pedidosHoje.filter((pedido) => pedido.tipo_entrega !== 'entrega').length
+  const ticketMedioHoje = pedidosHoje.length ? faturamentoHoje / pedidosHoje.length : 0
 
   if (carregando) return <TelaCentral texto="Abrindo painel..." />
 
@@ -1635,16 +6730,27 @@ function PainelRestaurante({ sessao }) {
           </>
         )}
 
-        <section className="resumo-painel">
+        <section className="resumo-painel resumo-painel-operacional">
           <div><Clock3 /><span>Novos</span><strong>{pedidos.filter((p) => p.status === 'recebido').length}</strong></div>
           <div><ChefHat /><span>Em preparo</span><strong>{pedidos.filter((p) => ['confirmado', 'preparando'].includes(p.status)).length}</strong></div>
+          <div><CheckCircle2 /><span>Prontos</span><strong>{pedidos.filter((p) => p.status === 'pronto').length}</strong></div>
           <div><Bike /><span>Saiu para entrega</span><strong>{pedidos.filter((p) => p.status === 'saiu_entrega').length}</strong></div>
-          <div><CheckCircle2 /><span>Concluídos</span><strong>{pedidos.filter((p) => p.status === 'concluido').length}</strong></div>
         </section>
 
         <div className="cabecalho-lista">
           <div><h2>Pedidos</h2><p>Atualização automática dos pedidos recebidos.</p></div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div className="acoes-pedidos-topo">
+            <label className="busca-pedidos">
+              <Search size={17} />
+              <input
+                value={buscaPedidos}
+                onChange={(e) => setBuscaPedidos(e.target.value)}
+                placeholder="Buscar pedido, cliente ou telefone"
+              />
+              {buscaPedidos && (
+                <button type="button" onClick={() => setBuscaPedidos('')} aria-label="Limpar busca"><X size={15} /></button>
+              )}
+            </label>
             <button
               type="button"
               onClick={alternarAlertas}
@@ -1917,7 +7023,7 @@ function PainelRestaurante({ sessao }) {
               </div>
             )
           })}
-          {!exibidosOrdenados.length && <div className="sem-pedidos"><ShoppingBag /><h3>Nenhum pedido aqui</h3><p>Os novos pedidos aparecerão automaticamente.</p></div>}
+          {!exibidosOrdenados.length && <div className="sem-pedidos"><ShoppingBag /><h3>{buscaPedidos ? 'Nenhum pedido encontrado' : 'Nenhum pedido aqui'}</h3><p>{buscaPedidos ? 'Tente buscar por outro número, nome ou telefone.' : 'Os novos pedidos aparecerão automaticamente.'}</p></div>}
         </section>
       </main>
     </div>
