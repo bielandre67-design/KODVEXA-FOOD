@@ -1999,6 +1999,23 @@ function NavegacaoPainel({ loja, ativo }) {
           color: #eef5ff;
         }
 
+        .modal-unidade.modal-unidade--assinatura {
+          width: min(1080px, 96vw);
+          border-color: rgba(53,132,255,.42);
+          background:
+            radial-gradient(circle at 16% 16%, rgba(24,104,238,.20), transparent 34%),
+            linear-gradient(145deg, #071729 0%, #081a30 52%, #061524 100%);
+          box-shadow:
+            0 36px 100px rgba(0,0,0,.58),
+            0 0 0 1px rgba(49,132,255,.05) inset;
+        }
+
+        @media (max-width: 820px) {
+          .modal-unidade.modal-unidade--assinatura {
+            width: min(620px, 100%);
+          }
+        }
+
         .modal-unidade__topo {
           display: flex;
           align-items: flex-start;
@@ -2505,7 +2522,7 @@ function NavegacaoPainel({ loja, ativo }) {
 
       {modalUnidadeAberto && (
         <div className="modal-unidade-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !criandoUnidade) setModalUnidadeAberto(false) }}>
-          <div className="modal-unidade">
+          <div className={`modal-unidade ${etapaFilial === 'assinatura' ? 'modal-unidade--assinatura' : ''}`}>
             <div className="modal-unidade__topo">
               <div>
                 <span>NOVA UNIDADE</span>
@@ -2518,247 +2535,362 @@ function NavegacaoPainel({ loja, ativo }) {
             </div>
 
             {etapaFilial === 'assinatura' ? (
-              <div style={{ padding: '6px 0 2px' }}>
+              <div style={{ padding: 18 }}>
                 <div
                   style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(300px,.86fr) minmax(450px,1.32fr)',
                     overflow: 'hidden',
-                    border: '1px solid rgba(74,116,165,.28)',
-                    borderRadius: 18,
-                    background: '#0c1d31',
-                    boxShadow: '0 22px 55px rgba(0,0,0,.22)',
+                    border: '1px solid rgba(53,132,255,.28)',
+                    borderRadius: 22,
+                    background: 'rgba(4,18,34,.70)',
+                    boxShadow: '0 24px 65px rgba(0,0,0,.24)',
                   }}
                 >
-                  <div
+                  <section
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'minmax(0,1fr) 265px',
-                      gap: 0,
+                      minHeight: 500,
+                      padding: '34px 32px 28px',
+                      borderRight: '1px solid rgba(85,142,221,.18)',
+                      background:
+                        'radial-gradient(circle at 20% 5%, rgba(31,111,255,.28), transparent 36%), linear-gradient(160deg,#0a2e62 0%,#071f43 54%,#07182c 100%)',
                     }}
                   >
-                    <div style={{ padding: '26px 28px 24px' }}>
-                      <span
-                        style={{
-                          color: '#6ea8ff',
-                          fontSize: '.66rem',
-                          fontWeight: 950,
-                          letterSpacing: '.11em',
-                        }}
-                      >
-                        EXPANSÃO DA REDE
-                      </span>
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '7px 11px',
+                        border: '1px solid rgba(59,156,255,.55)',
+                        borderRadius: 999,
+                        background: 'rgba(10,48,94,.66)',
+                        color: '#e9f4ff',
+                        fontSize: '.68rem',
+                        fontWeight: 950,
+                        letterSpacing: '.06em',
+                      }}
+                    >
+                      <Store size={15} />
+                      NOVA UNIDADE
+                    </div>
 
-                      <h3
-                        style={{
-                          margin: '9px 0 8px',
-                          maxWidth: 420,
-                          color: '#f5f8fc',
-                          fontSize: '1.55rem',
-                          lineHeight: 1.15,
-                          letterSpacing: '-.025em',
-                        }}
-                      >
-                        Sua próxima unidade, no mesmo KODVEXA
-                      </h3>
+                    <h3
+                      style={{
+                        margin: '22px 0 12px',
+                        maxWidth: 390,
+                        color: '#fff',
+                        fontSize: '2.15rem',
+                        lineHeight: 1.05,
+                        letterSpacing: '-.045em',
+                      }}
+                    >
+                      Expanda seu negócio com o <span style={{ color: '#3b8cff' }}>KODVEXA</span>
+                    </h3>
 
-                      <p
-                        style={{
-                          maxWidth: 450,
-                          margin: 0,
-                          color: '#8fa4bb',
-                          fontSize: '.78rem',
-                          lineHeight: 1.55,
-                        }}
-                      >
-                        Adicione uma filial sem criar outra conta. A operação continua organizada por unidade.
-                      </p>
+                    <p
+                      style={{
+                        maxWidth: 390,
+                        margin: 0,
+                        color: '#b3c7df',
+                        fontSize: '.84rem',
+                        lineHeight: 1.65,
+                      }}
+                    >
+                      Adicione uma filial e continue gerenciando pedidos, equipe e configurações em uma única conta.
+                    </p>
 
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          gap: 18,
-                          marginTop: 24,
-                          paddingTop: 18,
-                          borderTop: '1px solid rgba(148,163,184,.12)',
-                        }}
-                      >
-                        <div>
-                          <strong style={{ display: 'block', color: '#e3ebf5', fontSize: '.73rem' }}>
-                            Até 5 filiais
-                          </strong>
-                          <span style={{ color: '#70869e', fontSize: '.65rem' }}>
-                            além da Matriz
-                          </span>
+                    <div style={{ display: 'grid', gap: 15, marginTop: 28 }}>
+                      {[
+                        ['Até 5 filiais', 'além da sua Matriz'],
+                        ['Gestão centralizada', 'uma única conta para toda a rede'],
+                        ['Operação por unidade', 'pedidos e equipe separados'],
+                        ['Tudo organizado', 'troque de unidade sem sair do painel'],
+                      ].map(([titulo, descricao], indice) => (
+                        <div
+                          key={titulo}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '38px 1fr',
+                            alignItems: 'center',
+                            gap: 12,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 38,
+                              height: 38,
+                              display: 'grid',
+                              placeItems: 'center',
+                              border: '1px solid rgba(60,143,255,.28)',
+                              borderRadius: 11,
+                              background: 'rgba(31,107,224,.16)',
+                              color: '#59a1ff',
+                            }}
+                          >
+                            {indice === 0 ? <Store size={17} /> : indice === 1 ? <Users size={17} /> : indice === 2 ? <LayoutGrid size={17} /> : <CheckCircle2 size={17} />}
+                          </div>
+                          <div>
+                            <strong style={{ display: 'block', color: '#f2f7ff', fontSize: '.78rem' }}>
+                              {titulo}
+                            </strong>
+                            <span style={{ color: '#8ba7c7', fontSize: '.68rem' }}>
+                              {descricao}
+                            </span>
+                          </div>
                         </div>
+                      ))}
+                    </div>
 
-                        <div>
-                          <strong style={{ display: 'block', color: '#e3ebf5', fontSize: '.73rem' }}>
-                            Gestão centralizada
-                          </strong>
-                          <span style={{ color: '#70869e', fontSize: '.65rem' }}>
-                            uma única conta
-                          </span>
-                        </div>
-
-                        <div>
-                          <strong style={{ display: 'block', color: '#e3ebf5', fontSize: '.73rem' }}>
-                            Operação por unidade
-                          </strong>
-                          <span style={{ color: '#70869e', fontSize: '.65rem' }}>
-                            pedidos e equipe separados
-                          </span>
-                        </div>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: 12,
+                        marginTop: 30,
+                        padding: 14,
+                        border: '1px solid rgba(69,137,230,.26)',
+                        borderRadius: 15,
+                        background: 'rgba(6,25,48,.58)',
+                      }}
+                    >
+                      <div>
+                        <span style={{ color: '#8ba7c7', fontSize: '.64rem' }}>Plano atual</span>
+                        <strong style={{ display: 'block', marginTop: 3, color: '#fff', fontSize: '1rem' }}>
+                          R$ 79,90/mês
+                        </strong>
                       </div>
+                      <div style={{ borderLeft: '1px solid rgba(96,149,221,.24)', paddingLeft: 12 }}>
+                        <span style={{ color: '#8ba7c7', fontSize: '.64rem' }}>Com 5 filiais</span>
+                        <strong style={{ display: 'block', marginTop: 3, color: '#4c9aff', fontSize: '1rem' }}>
+                          R$ 229,40/mês
+                        </strong>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section style={{ padding: '32px 30px 26px', background: 'linear-gradient(180deg,rgba(7,27,49,.98),rgba(5,20,37,.98))' }}>
+                    <div>
+                      <span style={{ color: '#70a8ff', fontSize: '.66rem', fontWeight: 950, letterSpacing: '.09em' }}>
+                        ATIVAÇÃO DA FILIAL
+                      </span>
+                      <h3 style={{ margin: '7px 0 5px', color: '#fff', fontSize: '1.62rem', letterSpacing: '-.025em' }}>
+                        Escolha como pagar
+                      </h3>
+                      <p style={{ margin: 0, color: '#8ca3bd', fontSize: '.76rem' }}>
+                        Após a confirmação, o cadastro da nova unidade é liberado automaticamente.
+                      </p>
                     </div>
 
                     <div
                       style={{
                         display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'center',
-                        padding: '24px 22px',
-                        borderLeft: '1px solid rgba(148,163,184,.13)',
-                        background: 'rgba(15,38,64,.72)',
+                        alignItems: 'flex-end',
+                        justifyContent: 'space-between',
+                        gap: 16,
+                        marginTop: 22,
+                        padding: '17px 18px',
+                        border: '1px solid rgba(55,134,246,.35)',
+                        borderRadius: 15,
+                        background: 'linear-gradient(135deg,rgba(12,52,96,.84),rgba(7,31,58,.82))',
                       }}
                     >
-                      <span
-                        style={{
-                          color: '#8299b2',
-                          fontSize: '.64rem',
-                          fontWeight: 900,
-                          letterSpacing: '.08em',
-                        }}
-                      >
-                        POR FILIAL
-                      </span>
+                      <div>
+                        <span style={{ color: '#91a7bf', fontSize: '.64rem', fontWeight: 900, letterSpacing: '.06em' }}>
+                          VALOR DA FILIAL
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 5 }}>
+                          <strong style={{ color: '#fff', fontSize: '2.25rem', letterSpacing: '-.045em', lineHeight: 1 }}>
+                            R$ 29,90
+                          </strong>
+                          <span style={{ color: '#9db0c6', fontSize: '.78rem' }}>/ mês</span>
+                        </div>
+                        <small style={{ color: '#7f97b1' }}>adicional ao seu plano atual</small>
+                      </div>
+                      <ShieldCheck size={34} color="#4b97ff" />
+                    </div>
 
+                    {licencasDisponiveis > 0 ? (
                       <div
                         style={{
-                          display: 'flex',
-                          alignItems: 'baseline',
-                          gap: 5,
-                          margin: '9px 0 4px',
+                          marginTop: 22,
+                          padding: 20,
+                          border: '1px solid rgba(52,211,153,.30)',
+                          borderRadius: 16,
+                          background: 'rgba(16,185,129,.08)',
                         }}
                       >
-                        <strong
-                          style={{
-                            color: '#fff',
-                            fontSize: '2.05rem',
-                            lineHeight: 1,
-                            letterSpacing: '-.045em',
-                          }}
-                        >
-                          R$ 29,90
+                        <strong style={{ display: 'block', color: '#8ff0ce', fontSize: '.86rem' }}>
+                          ✓ Pagamento confirmado
                         </strong>
-                        <span style={{ color: '#8299b2', fontSize: '.7rem' }}>/mês</span>
-                      </div>
-
-                      <span style={{ color: '#6f869e', fontSize: '.66rem', lineHeight: 1.4 }}>
-                        valor adicional ao seu plano
-                      </span>
-
-                      {licencasDisponiveis > 0 ? (
+                        <p style={{ margin: '5px 0 15px', color: '#8ca3bd', fontSize: '.72rem' }}>
+                          Sua licença já está ativa. Agora é só cadastrar a filial.
+                        </p>
                         <button
                           type="button"
                           onClick={() => setEtapaFilial('cadastro')}
                           disabled={carregandoLicencas}
                           style={{
                             width: '100%',
-                            minHeight: 46,
-                            marginTop: 20,
+                            minHeight: 48,
                             border: '1px solid #4d8df7',
-                            borderRadius: 10,
-                            background: '#3478e5',
+                            borderRadius: 11,
+                            background: 'linear-gradient(135deg,#1769ee,#428cff)',
                             color: '#fff',
                             fontWeight: 950,
                             cursor: 'pointer',
-                            boxShadow: '0 8px 22px rgba(52,120,229,.18)',
                           }}
                         >
                           Cadastrar filial
                         </button>
-                      ) : (
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr',
+                          gap: 12,
+                          marginTop: 22,
+                        }}
+                      >
                         <div
                           style={{
-                            display: 'grid',
-                            gridTemplateColumns: '1fr 1fr',
-                            gap: 8,
-                            marginTop: 20,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            minHeight: 225,
+                            padding: 18,
+                            border: '1px solid rgba(28,214,166,.62)',
+                            borderRadius: 17,
+                            background: 'linear-gradient(160deg,rgba(4,79,74,.48),rgba(4,31,42,.76))',
+                            boxShadow: '0 14px 30px rgba(0,0,0,.12)',
                           }}
                         >
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignSelf: 'flex-start',
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              background: '#16b88d',
+                              color: '#fff',
+                              fontSize: '.59rem',
+                              fontWeight: 950,
+                            }}
+                          >
+                            MAIS RÁPIDO
+                          </div>
+                          <strong style={{ marginTop: 14, color: '#fff', fontSize: '1.08rem' }}>Pix</strong>
+                          <span style={{ marginTop: 3, color: '#a6bfce', fontSize: '.69rem' }}>QR Code + copia e cola</span>
+
+                          <div style={{ display: 'grid', gap: 8, margin: '16px 0 18px', color: '#b8ced9', fontSize: '.66rem' }}>
+                            <span>✓ Pagamento direto na KODVEXA</span>
+                            <span>✓ Ativação automática</span>
+                            <span>✓ QR Code válido por 30 minutos</span>
+                          </div>
+
                           <button
                             type="button"
                             onClick={() => iniciarPagamentoFilial('pix')}
                             disabled={ativandoLicencaTeste || carregandoLicencas}
                             style={{
-                              minHeight: 46,
-                              border: '1px solid #26b98b',
-                              borderRadius: 10,
-                              background: '#0f9f79',
+                              width: '100%',
+                              minHeight: 47,
+                              marginTop: 'auto',
+                              border: '1px solid #26d0a0',
+                              borderRadius: 11,
+                              background: 'linear-gradient(135deg,#0aa77d,#12c99b)',
                               color: '#fff',
                               fontWeight: 950,
                               cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
                               opacity: ativandoLicencaTeste ? .65 : 1,
                             }}
                           >
-                            {ativandoLicencaTeste ? 'Abrindo...' : 'Pix'}
+                            {ativandoLicencaTeste ? 'Abrindo...' : 'Pagar com Pix'}
                           </button>
+                        </div>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            minHeight: 225,
+                            padding: 18,
+                            border: '1px solid rgba(57,133,239,.55)',
+                            borderRadius: 17,
+                            background: 'linear-gradient(160deg,rgba(17,59,112,.62),rgba(7,29,54,.78))',
+                            boxShadow: '0 14px 30px rgba(0,0,0,.12)',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: 38,
+                              height: 30,
+                              display: 'grid',
+                              placeItems: 'center',
+                              border: '1px solid rgba(79,155,255,.35)',
+                              borderRadius: 9,
+                              background: 'rgba(32,117,239,.18)',
+                              color: '#54a0ff',
+                            }}
+                          >
+                            <span style={{ fontSize: '1rem' }}>▭</span>
+                          </div>
+                          <strong style={{ marginTop: 14, color: '#fff', fontSize: '1.08rem' }}>Cartão</strong>
+                          <span style={{ marginTop: 3, color: '#a6b8ce', fontSize: '.69rem' }}>via Mercado Pago</span>
+
+                          <div style={{ display: 'grid', gap: 8, margin: '16px 0 18px', color: '#b8c6da', fontSize: '.66rem' }}>
+                            <span>✓ Ambiente seguro</span>
+                            <span>✓ Confirmação automática</span>
+                            <span>✓ Cadastro liberado após aprovação</span>
+                          </div>
 
                           <button
                             type="button"
                             onClick={() => iniciarPagamentoFilial('cartao')}
                             disabled={ativandoLicencaTeste || carregandoLicencas}
                             style={{
-                              minHeight: 46,
+                              width: '100%',
+                              minHeight: 47,
+                              marginTop: 'auto',
                               border: '1px solid #4d8df7',
-                              borderRadius: 10,
-                              background: '#3478e5',
+                              borderRadius: 11,
+                              background: 'linear-gradient(135deg,#1768ed,#4290ff)',
                               color: '#fff',
                               fontWeight: 950,
                               cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
                               opacity: ativandoLicencaTeste ? .65 : 1,
-                              boxShadow: '0 8px 22px rgba(52,120,229,.18)',
+                              boxShadow: '0 10px 24px rgba(23,104,237,.18)',
                             }}
                           >
-                            {ativandoLicencaTeste ? 'Abrindo...' : 'Cartão'}
+                            {ativandoLicencaTeste ? 'Abrindo...' : 'Pagar com Cartão'}
                           </button>
                         </div>
-                      )}
+                      </div>
+                    )}
 
-                      <span
-                        style={{
-                          display: 'block',
-                          marginTop: 10,
-                          color: '#687f97',
-                          fontSize: '.62rem',
-                          textAlign: 'center',
-                        }}
-                      >
-                        Cadastro liberado após a ativação
-                      </span>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        marginTop: 18,
+                        padding: '12px 14px',
+                        border: '1px solid rgba(99,135,180,.20)',
+                        borderRadius: 12,
+                        background: 'rgba(4,16,29,.50)',
+                      }}
+                    >
+                      <ShieldCheck size={21} color="#4a96ff" />
+                      <div>
+                        <strong style={{ display: 'block', color: '#dce9f7', fontSize: '.7rem' }}>
+                          Pagamento processado com segurança
+                        </strong>
+                        <span style={{ color: '#738ba5', fontSize: '.62rem' }}>
+                          Confirmação automática integrada ao KODVEXA.
+                        </span>
+                      </div>
                     </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      flexWrap: 'wrap',
-                      padding: '11px 28px',
-                      borderTop: '1px solid rgba(148,163,184,.12)',
-                      background: 'rgba(5,15,27,.28)',
-                      color: '#71879f',
-                      fontSize: '.65rem',
-                    }}
-                  >
-                    <span>
-                      Plano atual <strong style={{ color: '#bac8d7' }}>R$ 79,90/mês</strong>
-                    </span>
-                    <span>
-                      5 filiais <strong style={{ color: '#dbe6f2' }}>R$ 229,40/mês no total</strong>
-                    </span>
-                  </div>
+                  </section>
                 </div>
 
                 {erroUnidade && (
@@ -2766,6 +2898,23 @@ function NavegacaoPainel({ loja, ativo }) {
                     {erroUnidade}
                   </div>
                 )}
+
+                <style>{`
+                  @media (max-width: 820px) {
+                    .modal-unidade--assinatura > div:nth-child(2) > div:first-child {
+                      grid-template-columns: 1fr !important;
+                    }
+                  }
+                  @media (max-width: 620px) {
+                    .modal-unidade--assinatura section {
+                      padding-left: 18px !important;
+                      padding-right: 18px !important;
+                    }
+                    .modal-unidade--assinatura section > div[style*="grid-template-columns: 1fr 1fr"] {
+                      grid-template-columns: 1fr !important;
+                    }
+                  }
+                `}</style>
               </div>
             ) : etapaFilial === 'pix' ? (
               <div
