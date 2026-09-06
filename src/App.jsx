@@ -1620,6 +1620,7 @@ function NavegacaoPainel({ loja, ativo }) {
   const [matrizLicencaId, setMatrizLicencaId] = useState('')
   const [pixFilial, setPixFilial] = useState(null)
   const [copiouPixFilial, setCopiouPixFilial] = useState(false)
+  const [formaPagamentoFilial, setFormaPagamentoFilial] = useState('pix')
   const [formUnidade, setFormUnidade] = useState({
     nome_unidade: '',
     endereco: '',
@@ -1803,6 +1804,7 @@ function NavegacaoPainel({ loja, ativo }) {
     setErroUnidade('')
     setPixFilial(null)
     setCopiouPixFilial(false)
+    setFormaPagamentoFilial('pix')
     setEtapaFilial('assinatura')
 
     const matriz = unidades.find((unidade) => unidade.tipo_unidade === 'matriz')
@@ -2754,33 +2756,79 @@ function NavegacaoPainel({ loja, ativo }) {
                         }}
                       >
                         <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setFormaPagamentoFilial('pix')}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') setFormaPagamentoFilial('pix')
+                          }}
                           style={{
+                            position: 'relative',
                             display: 'flex',
                             flexDirection: 'column',
                             minHeight: 225,
                             padding: 18,
-                            border: '1px solid rgba(28,214,166,.62)',
+                            border: formaPagamentoFilial === 'pix'
+                              ? '1px solid rgba(42,224,169,.88)'
+                              : '1px solid rgba(57,133,239,.35)',
                             borderRadius: 17,
-                            background: 'linear-gradient(160deg,rgba(4,79,74,.48),rgba(4,31,42,.76))',
-                            boxShadow: '0 14px 30px rgba(0,0,0,.12)',
+                            background: formaPagamentoFilial === 'pix'
+                              ? 'linear-gradient(160deg,rgba(5,104,87,.58),rgba(4,37,46,.88))'
+                              : 'linear-gradient(160deg,rgba(17,59,112,.42),rgba(7,29,54,.70))',
+                            boxShadow: formaPagamentoFilial === 'pix'
+                              ? '0 15px 34px rgba(7,190,143,.16), inset 0 0 0 1px rgba(42,224,169,.08)'
+                              : '0 14px 30px rgba(0,0,0,.10)',
+                            transform: formaPagamentoFilial === 'pix' ? 'translateY(-2px)' : 'none',
+                            cursor: 'pointer',
+                            transition: 'all .2s ease',
                           }}
                         >
                           <div
                             style={{
-                              display: 'inline-flex',
-                              alignSelf: 'flex-start',
-                              padding: '4px 8px',
-                              borderRadius: 999,
-                              background: '#16b88d',
-                              color: '#fff',
-                              fontSize: '.59rem',
-                              fontWeight: 950,
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: 8,
                             }}
                           >
-                            MAIS RÁPIDO
+                            <div
+                              style={{
+                                display: 'inline-flex',
+                                alignSelf: 'flex-start',
+                                padding: '4px 8px',
+                                borderRadius: 999,
+                                background: formaPagamentoFilial === 'pix' ? '#18bd91' : 'rgba(65,137,237,.18)',
+                                color: formaPagamentoFilial === 'pix' ? '#fff' : '#8bbcff',
+                                fontSize: '.59rem',
+                                fontWeight: 950,
+                              }}
+                            >
+                              MAIS RÁPIDO
+                            </div>
+
+                            {formaPagamentoFilial === 'pix' && (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  color: '#7ff0ce',
+                                  fontSize: '.6rem',
+                                  fontWeight: 950,
+                                }}
+                              >
+                                <CheckCircle2 size={14} />
+                                SELECIONADO
+                              </span>
+                            )}
                           </div>
-                          <strong style={{ marginTop: 14, color: '#fff', fontSize: '1.08rem' }}>Pix</strong>
-                          <span style={{ marginTop: 3, color: '#a6bfce', fontSize: '.69rem' }}>QR Code + copia e cola</span>
+
+                          <strong style={{ marginTop: 14, color: '#fff', fontSize: '1.08rem' }}>
+                            Pix
+                          </strong>
+                          <span style={{ marginTop: 3, color: '#a6bfce', fontSize: '.69rem' }}>
+                            QR Code + copia e cola
+                          </span>
 
                           <div style={{ display: 'grid', gap: 8, margin: '16px 0 18px', color: '#b8ced9', fontSize: '.66rem' }}>
                             <span>✓ Pagamento direto na KODVEXA</span>
@@ -2790,19 +2838,31 @@ function NavegacaoPainel({ loja, ativo }) {
 
                           <button
                             type="button"
-                            onClick={() => iniciarPagamentoFilial('pix')}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setFormaPagamentoFilial('pix')
+                              iniciarPagamentoFilial('pix')
+                            }}
                             disabled={ativandoLicencaTeste || carregandoLicencas}
                             style={{
                               width: '100%',
                               minHeight: 47,
                               marginTop: 'auto',
-                              border: '1px solid #26d0a0',
+                              border: formaPagamentoFilial === 'pix'
+                                ? '1px solid #31ddb0'
+                                : '1px solid #4d8df7',
                               borderRadius: 11,
-                              background: 'linear-gradient(135deg,#0aa77d,#12c99b)',
+                              background: formaPagamentoFilial === 'pix'
+                                ? 'linear-gradient(135deg,#0aa77d,#15c99b)'
+                                : 'linear-gradient(135deg,#1768ed,#4290ff)',
                               color: '#fff',
                               fontWeight: 950,
                               cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
                               opacity: ativandoLicencaTeste ? .65 : 1,
+                              boxShadow: formaPagamentoFilial === 'pix'
+                                ? '0 10px 24px rgba(10,167,125,.18)'
+                                : '0 10px 24px rgba(23,104,237,.14)',
+                              transition: 'all .2s ease',
                             }}
                           >
                             {ativandoLicencaTeste ? 'Abrindo...' : 'Pagar com Pix'}
@@ -2810,33 +2870,83 @@ function NavegacaoPainel({ loja, ativo }) {
                         </div>
 
                         <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setFormaPagamentoFilial('cartao')}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') setFormaPagamentoFilial('cartao')
+                          }}
                           style={{
+                            position: 'relative',
                             display: 'flex',
                             flexDirection: 'column',
                             minHeight: 225,
                             padding: 18,
-                            border: '1px solid rgba(57,133,239,.55)',
+                            border: formaPagamentoFilial === 'cartao'
+                              ? '1px solid rgba(42,224,169,.88)'
+                              : '1px solid rgba(57,133,239,.35)',
                             borderRadius: 17,
-                            background: 'linear-gradient(160deg,rgba(17,59,112,.62),rgba(7,29,54,.78))',
-                            boxShadow: '0 14px 30px rgba(0,0,0,.12)',
+                            background: formaPagamentoFilial === 'cartao'
+                              ? 'linear-gradient(160deg,rgba(5,104,87,.58),rgba(4,37,46,.88))'
+                              : 'linear-gradient(160deg,rgba(17,59,112,.62),rgba(7,29,54,.78))',
+                            boxShadow: formaPagamentoFilial === 'cartao'
+                              ? '0 15px 34px rgba(7,190,143,.16), inset 0 0 0 1px rgba(42,224,169,.08)'
+                              : '0 14px 30px rgba(0,0,0,.12)',
+                            transform: formaPagamentoFilial === 'cartao' ? 'translateY(-2px)' : 'none',
+                            cursor: 'pointer',
+                            transition: 'all .2s ease',
                           }}
                         >
                           <div
                             style={{
-                              width: 38,
-                              height: 30,
-                              display: 'grid',
-                              placeItems: 'center',
-                              border: '1px solid rgba(79,155,255,.35)',
-                              borderRadius: 9,
-                              background: 'rgba(32,117,239,.18)',
-                              color: '#54a0ff',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: 8,
                             }}
                           >
-                            <span style={{ fontSize: '1rem' }}>▭</span>
+                            <div
+                              style={{
+                                width: 38,
+                                height: 30,
+                                display: 'grid',
+                                placeItems: 'center',
+                                border: formaPagamentoFilial === 'cartao'
+                                  ? '1px solid rgba(48,223,173,.45)'
+                                  : '1px solid rgba(79,155,255,.35)',
+                                borderRadius: 9,
+                                background: formaPagamentoFilial === 'cartao'
+                                  ? 'rgba(21,190,143,.16)'
+                                  : 'rgba(32,117,239,.18)',
+                                color: formaPagamentoFilial === 'cartao' ? '#71eac7' : '#54a0ff',
+                              }}
+                            >
+                              <span style={{ fontSize: '1rem' }}>▭</span>
+                            </div>
+
+                            {formaPagamentoFilial === 'cartao' && (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  color: '#7ff0ce',
+                                  fontSize: '.6rem',
+                                  fontWeight: 950,
+                                }}
+                              >
+                                <CheckCircle2 size={14} />
+                                SELECIONADO
+                              </span>
+                            )}
                           </div>
-                          <strong style={{ marginTop: 14, color: '#fff', fontSize: '1.08rem' }}>Cartão</strong>
-                          <span style={{ marginTop: 3, color: '#a6b8ce', fontSize: '.69rem' }}>via Mercado Pago</span>
+
+                          <strong style={{ marginTop: 14, color: '#fff', fontSize: '1.08rem' }}>
+                            Cartão
+                          </strong>
+                          <span style={{ marginTop: 3, color: '#a6b8ce', fontSize: '.69rem' }}>
+                            via Mercado Pago
+                          </span>
 
                           <div style={{ display: 'grid', gap: 8, margin: '16px 0 18px', color: '#b8c6da', fontSize: '.66rem' }}>
                             <span>✓ Ambiente seguro</span>
@@ -2846,25 +2956,37 @@ function NavegacaoPainel({ loja, ativo }) {
 
                           <button
                             type="button"
-                            onClick={() => iniciarPagamentoFilial('cartao')}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setFormaPagamentoFilial('cartao')
+                              iniciarPagamentoFilial('cartao')
+                            }}
                             disabled={ativandoLicencaTeste || carregandoLicencas}
                             style={{
                               width: '100%',
                               minHeight: 47,
                               marginTop: 'auto',
-                              border: '1px solid #4d8df7',
+                              border: formaPagamentoFilial === 'cartao'
+                                ? '1px solid #31ddb0'
+                                : '1px solid #4d8df7',
                               borderRadius: 11,
-                              background: 'linear-gradient(135deg,#1768ed,#4290ff)',
+                              background: formaPagamentoFilial === 'cartao'
+                                ? 'linear-gradient(135deg,#0aa77d,#15c99b)'
+                                : 'linear-gradient(135deg,#1768ed,#4290ff)',
                               color: '#fff',
                               fontWeight: 950,
                               cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
                               opacity: ativandoLicencaTeste ? .65 : 1,
-                              boxShadow: '0 10px 24px rgba(23,104,237,.18)',
+                              boxShadow: formaPagamentoFilial === 'cartao'
+                                ? '0 10px 24px rgba(10,167,125,.18)'
+                                : '0 10px 24px rgba(23,104,237,.18)',
+                              transition: 'all .2s ease',
                             }}
                           >
                             {ativandoLicencaTeste ? 'Abrindo...' : 'Pagar com Cartão'}
                           </button>
                         </div>
+                      </div>
                       </div>
                     )}
 
