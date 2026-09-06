@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, Link, Route, Routes, useParams } from 'react-router-dom'
-import { Bell, Bike, CheckCircle2, ChefHat, ChevronRight, Clock3, Home, LayoutGrid, LogOut, MapPin, Menu, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShoppingBag, Sparkles, Store, Trash2, X } from 'lucide-react'
+import { Bell, Bike, CheckCircle2, ChefHat, ChevronRight, Clock3, Home, LayoutGrid, LogOut, MapPin, Menu, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShieldCheck, ShoppingBag, Sparkles, Store, Trash2, UserPlus, Users, X } from 'lucide-react'
 import { supabase } from './supabase'
 import './App.css'
 
@@ -8,6 +8,62 @@ const dinheiro = (valor) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valor || 0)
 
 const GEOAPIFY_API_KEY = import.meta.env.VITE_GEOAPIFY_API_KEY
+
+// =====================================================
+// KODVEXA FOOD - MATRIZ / FILIAIS
+// =====================================================
+async function obterUnidadesUsuario() {
+  const { data, error } = await supabase.rpc('get_meus_estabelecimentos')
+  if (error) throw error
+  return data || []
+}
+
+async function obterUnidadeAtualCompleta() {
+  const unidades = await obterUnidadesUsuario()
+  if (!unidades.length) return { unidade: null, estabelecimento: null, unidades: [] }
+
+  const salva = localStorage.getItem('kodvexa_unidade_atual')
+  let unidade = unidades.find((item) => item.estabelecimento_id === salva)
+
+  if (!unidade) {
+    unidade = unidades.find((item) => item.tipo_unidade === 'matriz') || unidades[0]
+  }
+
+  localStorage.setItem('kodvexa_unidade_atual', unidade.estabelecimento_id)
+
+  const { data: estabelecimento, error } = await supabase
+    .from('estabelecimentos')
+    .select('*')
+    .eq('id', unidade.estabelecimento_id)
+    .single()
+
+  if (error) throw error
+  return { unidade, estabelecimento, unidades }
+}
+
+function normalizarFuncaoAcesso(unidade, unidades = []) {
+  const bruta = String(unidade?.funcao || '').trim().toLowerCase()
+
+  if (['dono', 'admin', 'administrador', 'owner', 'proprietario', 'proprietário'].includes(bruta)) {
+    return 'dono'
+  }
+
+  if (bruta === 'gerente') return 'gerente'
+  if (bruta === 'atendente') return 'atendente'
+
+  // Compatibilidade com contas antigas do KODVEXA:
+  // se o usuário já possui acesso à Matriz e a função veio vazia/antiga,
+  // tratamos como dono para não bloquear o proprietário existente.
+  const temMatriz = (unidades || []).some((item) => item.tipo_unidade === 'matriz')
+  if (!bruta && temMatriz) return 'dono'
+
+  return bruta || 'atendente'
+}
+
+function selecionarUnidadePainel(estabelecimentoId) {
+  localStorage.setItem('kodvexa_unidade_atual', estabelecimentoId)
+  window.location.reload()
+}
 
 async function buscarCoordenadasGeoapify(endereco, cepEsperado = '') {
   if (!GEOAPIFY_API_KEY) throw new Error('Chave do Geoapify não configurada no .env.')
@@ -65,6 +121,63 @@ async function calcularRotaGeoapify(origem, destino, cepOrigem = '', cepDestino 
   }
 }
 
+function minutosDoHorario(valor = '') {
+  const [hora, minuto] = String(valor || '').slice(0, 5).split(':').map(Number)
+  if (!Number.isFinite(hora) || !Number.isFinite(minuto)) return null
+  return hora * 60 + minuto
+}
+
+function agoraSaoPaulo() {
+  const partes = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+
+  const mapa = Object.fromEntries(partes.map((parte) => [parte.type, parte.value]))
+  const dias = {
+    'dom.': 0, 'seg.': 1, 'ter.': 2, 'qua.': 3,
+    'qui.': 4, 'sex.': 5, 'sáb.': 6,
+  }
+
+  return {
+    diaSemana: dias[mapa.weekday] ?? new Date().getDay(),
+    minutos: Number(mapa.hour || 0) * 60 + Number(mapa.minute || 0),
+  }
+}
+
+function lojaEstaAbertaAgora(horarios = [], abertoManual = true) {
+  if (!Array.isArray(horarios) || !horarios.length) {
+    return Boolean(abertoManual)
+  }
+
+  const { diaSemana, minutos } = agoraSaoPaulo()
+  const hoje = horarios.find((item) => Number(item.dia_semana) === diaSemana)
+
+  if (!hoje || hoje.fechado) return false
+
+  const abre = minutosDoHorario(hoje.abre)
+  const fecha = minutosDoHorario(hoje.fecha)
+
+  if (abre == null || fecha == null) return false
+
+  // Mesmo dia, ex.: 11:00 às 23:00
+  if (fecha > abre) {
+    return minutos >= abre && minutos < fecha
+  }
+
+  // Vira a madrugada, ex.: 18:00 às 02:00
+  if (fecha < abre) {
+    return minutos >= abre || minutos < fecha
+  }
+
+  // Mesmo horário de abertura e fechamento = fechado por segurança
+  return false
+}
+
+
 function Cardapio() {
   const { slug } = useParams()
   const [loja, setLoja] = useState(null)
@@ -89,6 +202,7 @@ function Cardapio() {
   const [pedidoCriado, setPedidoCriado] = useState(null)
   const [calculandoEntrega, setCalculandoEntrega] = useState(false)
   const [entregaCalculada, setEntregaCalculada] = useState(null)
+  const [horariosLoja, setHorariosLoja] = useState([])
   const [formulario, setFormulario] = useState({
     nome: '', telefone: '', tipo: 'entrega', cep: '', numero: '', endereco: '', complemento: '',
     referencia: '', pagamento: 'pix', troco: '', observacao: '',
@@ -124,7 +238,6 @@ function Cardapio() {
             .from('produtos')
             .select('*')
             .eq('estabelecimento_id', estabelecimento.id)
-            .eq('disponivel', true)
             .order('ordem'),
         ])
 
@@ -134,9 +247,14 @@ function Cardapio() {
         setLoja(estabelecimento)
         setCategorias(dadosCategorias || [])
         setProdutos(dadosProdutos || [])
-        const [{ data: grupos }, { data: ops }] = await Promise.all([
+        const [{ data: grupos }, { data: ops }, { data: horariosPublicos }] = await Promise.all([
           supabase.from('grupos_adicionais').select('*').eq('estabelecimento_id', estabelecimento.id).eq('ativo', true).order('ordem'),
           supabase.from('adicionais').select('*').eq('estabelecimento_id', estabelecimento.id).eq('disponivel', true).order('ordem'),
+          supabase
+            .from('horarios_funcionamento')
+            .select('dia_semana, abre, fecha, fechado')
+            .eq('estabelecimento_id', estabelecimento.id)
+            .order('dia_semana'),
         ])
         const idsProdutos = (dadosProdutos || []).map((p) => p.id)
         const { data: vinculos } = idsProdutos.length
@@ -145,6 +263,7 @@ function Cardapio() {
         setGruposAdicionais(grupos || [])
         setAdicionais(ops || [])
         setProdutoGrupos(vinculos || [])
+        setHorariosLoja(horariosPublicos || [])
       }
 
       setCarregando(false)
@@ -152,6 +271,19 @@ function Cardapio() {
 
     carregar()
   }, [slug])
+
+  const abertoAgora = useMemo(
+    () => lojaEstaAbertaAgora(horariosLoja, loja?.aberto ?? true),
+    [horariosLoja, loja?.aberto],
+  )
+
+  useEffect(() => {
+    if (!abertoAgora) {
+      setProdutoAberto(null)
+      setCarrinhoAberto(false)
+      setCheckoutAberto(false)
+    }
+  }, [abertoAgora])
 
   const produtosFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase()
@@ -179,6 +311,16 @@ function Cardapio() {
   const total = carrinho.reduce((soma, item) => soma + item.preco * item.quantidade, 0)
 
   function abrirProduto(produto) {
+    if (!abertoAgora) {
+      setErroPedido('Loja fechada no momento. Você pode consultar o cardápio, mas os pedidos estão pausados.')
+      return
+    }
+
+    if (produto?.disponivel === false) {
+      setErroPedido(`${produto.nome || 'Este produto'} está esgotado no momento.`)
+      return
+    }
+
     setProdutoAberto(produto)
     setQuantidade(1)
     setObservacaoItem('')
@@ -257,6 +399,11 @@ function Cardapio() {
   }
 
   function adicionarAoCarrinho() {
+    if (!abertoAgora) {
+      setErroPedido('Loja fechada no momento. Você pode consultar o cardápio, mas não adicionar itens.')
+      return
+    }
+
     if (!adicionaisValidos()) { setErroPedido('Confira as opções obrigatórias deste produto.'); return }
     const observacaoLimpa = observacaoItem.trim()
     const idsSelecionados = adicionaisSelecionados.map((a) => a.id).sort()
@@ -272,6 +419,8 @@ function Cardapio() {
   }
 
   function alterarItem(chaveItem, diferenca) {
+    if (!abertoAgora) return
+
     setCarrinho((atual) =>
       atual
         .map((item) =>
@@ -370,6 +519,11 @@ function Cardapio() {
     evento.preventDefault()
     setErroPedido('')
 
+    if (!abertoAgora) {
+      setErroPedido('Esta unidade está fechada no momento. Volte durante o horário de funcionamento.')
+      return
+    }
+
     if (!formulario.nome.trim() || formulario.telefone.replace(/\D/g, '').length < 10) {
       setErroPedido('Informe seu nome e um telefone válido com DDD.')
       return
@@ -432,1934 +586,7 @@ function Cardapio() {
         <div className="hero__overlay" />      </header>
 
       <main className="limite conteudo">
-        <style>{`
-          .categorias-filtro {
-            display: flex;
-            gap: 9px;
-            overflow-x: auto;
-            padding: 2px 0 6px;
-            scrollbar-width: none;
-          }
-
-          .categorias-filtro::-webkit-scrollbar {
-            display: none;
-          }
-
-          .loja-mobile-nav {
-            display: none;
-          }
-
-
-          .hero {
-            position: relative;
-            overflow: hidden;
-          }
-
-          .hero__overlay {
-            background:
-              linear-gradient(180deg, rgba(7,12,20,.00) 38%, rgba(7,12,20,.10) 66%, rgba(7,12,20,.48) 100%) !important;
-          }
-
-          .loja-identidade {
-            display: grid;
-            grid-template-columns: 58px minmax(0,1fr);
-            gap: 12px;
-            align-items: center;
-            margin: 0 0 12px;
-            padding: 12px 14px;
-            border: 1px solid #e1e7ef;
-            border-radius: 18px;
-            background: rgba(255,255,255,.98);
-            box-shadow: 0 10px 24px rgba(20,34,51,.07);
-          }
-
-          .loja-identidade__logo {
-            width: 58px;
-            height: 58px;
-            display: grid;
-            place-items: center;
-            overflow: hidden;
-            border: 1px solid #e5eaf0;
-            border-radius: 16px;
-            background: #0b1420;
-          }
-
-          .loja-identidade__logo img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-          }
-
-          .loja-identidade__texto {
-            min-width: 0;
-          }
-
-          .loja-identidade__texto > span {
-            display: block;
-            margin-bottom: 3px;
-            color: #8b98a9;
-            font-size: .58rem;
-            font-weight: 900;
-            letter-spacing: .10em;
-            text-transform: uppercase;
-          }
-
-          .loja-identidade__texto h1 {
-            margin: 0 0 7px;
-            overflow: hidden;
-            color: #152033;
-            font-size: 1.08rem;
-            line-height: 1.1;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-          }
-
-          .loja-identidade__meta {
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            flex-wrap: wrap;
-          }
-
-          .loja-identidade__meta span {
-            min-height: 25px;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 0 8px;
-            border-radius: 999px;
-            background: #f3f6f9;
-            color: #6a788b;
-            font-size: .65rem;
-            font-weight: 800;
-          }
-
-          .loja-identidade__meta span.aberto {
-            background: #eefbf3;
-            color: #15803d;
-          }
-
-          .loja-identidade__meta span.fechado {
-            background: #fff0f1;
-            color: #c24145;
-          }
-
-          .loja-identidade__meta i {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: currentColor;
-          }
-
-          .categorias-clean {
-            gap: 8px !important;
-          }
-
-          .categorias-clean button {
-            min-height: 38px !important;
-            padding: 0 15px !important;
-            border: 1px solid #dce4ee !important;
-            border-radius: 999px !important;
-            background: rgba(255,255,255,.97) !important;
-            color: #1b2638 !important;
-            box-shadow: 0 4px 12px rgba(20,34,51,.05) !important;
-          }
-
-          .categorias-clean button::before,
-          .categorias-clean button::after {
-            display: none !important;
-          }
-
-          .categorias-clean button.ativo {
-            border-color: color-mix(in srgb, var(--cor-loja) 44%, #dce4ee) !important;
-            background: color-mix(in srgb, var(--cor-loja) 9%, #fff) !important;
-            color: var(--cor-loja) !important;
-            box-shadow: 0 6px 14px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;
-          }
-
-
-          @property --led-angle {
-            syntax: '<angle>';
-            initial-value: 0deg;
-            inherits: false;
-          }
-
-          .vitrine-destaques {
-            position: relative;
-            margin: 12px 0 26px;
-            padding: 15px 14px 14px;
-            border: 1px solid rgba(225,231,239,.95);
-            border-radius: 22px;
-            background:
-              radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--cor-loja) 9%, transparent), transparent 38%),
-              linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,253,.96));
-            box-shadow: 0 12px 30px rgba(20,34,51,.07);
-            overflow: hidden;
-          }
-
-          .vitrine-destaques::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            border-radius: inherit;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
-          }
-
-          .vitrine-destaques__topo {
-            position: relative;
-            z-index: 2;
-            display: flex;
-            align-items: flex-end;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 13px;
-          }
-
-          .vitrine-destaques__selo {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            min-height: 27px;
-            padding: 0 10px;
-            border: 1px solid color-mix(in srgb, var(--cor-loja) 20%, #dfe6ef);
-            border-radius: 999px;
-            background: color-mix(in srgb, var(--cor-loja) 8%, #fff);
-            color: var(--cor-loja);
-            font-size: .68rem;
-            font-weight: 900;
-            letter-spacing: .02em;
-          }
-
-          .vitrine-destaques h2 {
-            margin: 7px 0 3px;
-            color: #111827;
-            font-size: 1.22rem;
-            line-height: 1.15;
-            letter-spacing: -.02em;
-          }
-
-          .vitrine-destaques p {
-            margin: 0;
-            color: #7d899b;
-            font-size: .79rem;
-          }
-
-          .vitrine-destaques__lista {
-            position: relative;
-            z-index: 2;
-            display: grid;
-            grid-auto-flow: column;
-            grid-auto-columns: minmax(220px, 260px);
-            gap: 13px;
-            overflow-x: auto;
-            padding: 2px 2px 9px;
-            scroll-snap-type: x proximity;
-            scrollbar-width: none;
-          }
-
-          .vitrine-destaques__lista::-webkit-scrollbar {
-            display: none;
-          }
-
-          .vitrine-destaques__card {
-            --led-angle: 0deg;
-            position: relative;
-            isolation: isolate;
-            overflow: hidden;
-            display: grid;
-            grid-template-rows: 134px auto;
-            min-width: 0;
-            padding: 2px;
-            border: 0;
-            border-radius: 20px;
-            background:
-              conic-gradient(
-                from var(--led-angle),
-                transparent 0deg 250deg,
-                color-mix(in srgb, var(--cor-loja) 80%, #7c3aed) 280deg,
-                #8fb8ff 305deg,
-                transparent 335deg 360deg
-              );
-            box-shadow:
-              0 12px 28px rgba(20,34,51,.09),
-              0 0 0 1px rgba(215,224,235,.65);
-            text-align: left;
-            scroll-snap-align: start;
-            cursor: pointer;
-            animation: ledCardRound 4.2s linear infinite;
-          }
-
-          .vitrine-destaques__card::before {
-            content: '';
-            position: absolute;
-            z-index: -1;
-            inset: 2px;
-            border-radius: 18px;
-            background: #fff;
-          }
-
-          .vitrine-destaques__card::after {
-            content: '';
-            position: absolute;
-            z-index: 3;
-            inset: 0;
-            pointer-events: none;
-            border-radius: inherit;
-            box-shadow:
-              inset 0 0 0 1px rgba(255,255,255,.5),
-              0 0 18px color-mix(in srgb, var(--cor-loja) 10%, transparent);
-          }
-
-          @keyframes ledCardRound {
-            to { --led-angle: 360deg; }
-          }
-
-          .vitrine-destaques__imagem {
-            position: relative;
-            overflow: hidden;
-            display: grid;
-            place-items: center;
-            margin: 2px 2px 0;
-            border-radius: 16px 16px 10px 10px;
-            background: #f4f6f9;
-          }
-
-          .vitrine-destaques__imagem img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transition: transform .28s ease;
-          }
-
-          .vitrine-destaques__card:active .vitrine-destaques__imagem img {
-            transform: scale(1.025);
-          }
-
-          .vitrine-destaques__badge {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            min-height: 25px;
-            display: inline-flex;
-            align-items: center;
-            padding: 0 9px;
-            border: 1px solid rgba(255,255,255,.45);
-            border-radius: 999px;
-            background: rgba(19,31,49,.88);
-            color: #fff;
-            font-size: .6rem;
-            font-weight: 950;
-            letter-spacing: .07em;
-            box-shadow: 0 7px 18px rgba(10,19,31,.18);
-            backdrop-filter: blur(8px);
-          }
-
-          .vitrine-destaques__conteudo {
-            position: relative;
-            z-index: 1;
-            display: grid;
-            gap: 5px;
-            margin: 0 2px 2px;
-            padding: 12px 13px 13px;
-            border-radius: 10px 10px 16px 16px;
-            background: #fff;
-          }
-
-          .vitrine-destaques__conteudo > strong {
-            overflow: hidden;
-            color: #131d2e;
-            font-size: .94rem;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-          }
-
-          .vitrine-destaques__conteudo > small {
-            min-height: 34px;
-            display: -webkit-box;
-            overflow: hidden;
-            color: #7c8ba0;
-            font-size: .72rem;
-            line-height: 1.35;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-          }
-
-          .vitrine-destaques__precos {
-            display: flex;
-            align-items: baseline;
-            gap: 8px;
-            margin-top: 4px;
-          }
-
-          .vitrine-destaques__precos del {
-            color: #9aa6b7;
-            font-size: .69rem;
-          }
-
-          .vitrine-destaques__precos b {
-            color: var(--cor-loja);
-            font-size: .96rem;
-            font-weight: 900;
-          }
-
-          .loja-mobile-nav.oculto-modal {
-            display: none !important;
-          }
-
-          .categorias-filtro button {
-            flex: 0 0 auto;
-            min-height: 40px;
-            padding: 0 16px;
-            border: 1px solid #dbe3ee;
-            border-radius: 999px;
-            background: #fff;
-            color: #192235;
-            font: inherit;
-            font-size: .88rem;
-            font-weight: 800;
-            cursor: pointer;
-            transition: .18s ease;
-          }
-
-          .categorias-filtro button.ativo {
-            border-color: var(--cor-loja);
-            background: var(--cor-loja);
-            color: #fff;
-            box-shadow: 0 7px 18px color-mix(in srgb, var(--cor-loja) 24%, transparent);
-          }
-
-
-          .categorias-led {
-            gap: 10px;
-          }
-
-          .categorias-led button {
-            position: relative;
-            isolation: isolate;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            overflow: hidden;
-          }
-
-          .categorias-led button::before {
-            content: '';
-            position: absolute;
-            z-index: -2;
-            inset: -1px;
-            border-radius: inherit;
-            background:
-              linear-gradient(
-                110deg,
-                transparent 0 22%,
-                color-mix(in srgb, var(--cor-loja) 55%, #7c3aed) 32%,
-                transparent 42% 100%
-              );
-            background-size: 220% 100%;
-            background-position: 140% 0;
-            opacity: 0;
-            transition: opacity .18s ease;
-          }
-
-          .categorias-led button::after {
-            content: '';
-            position: absolute;
-            z-index: -1;
-            inset: 1px;
-            border-radius: inherit;
-            background: rgba(255,255,255,.98);
-          }
-
-          .categorias-led button.ativo::before {
-            opacity: 1;
-            animation: categoriaLedMove 3.2s linear infinite;
-          }
-
-          .categorias-led button.ativo::after {
-            background:
-              linear-gradient(
-                135deg,
-                color-mix(in srgb, var(--cor-loja) 88%, #2f2bff),
-                color-mix(in srgb, var(--cor-loja) 70%, #7c3aed)
-              );
-          }
-
-          .categorias-led button.ativo {
-            border-color: transparent !important;
-            background: transparent !important;
-            color: #fff !important;
-            box-shadow:
-              0 8px 18px color-mix(in srgb, var(--cor-loja) 22%, transparent),
-              0 0 0 1px color-mix(in srgb, var(--cor-loja) 14%, transparent) !important;
-          }
-
-          .categoria-led__icone {
-            width: 25px;
-            height: 25px;
-            display: grid;
-            place-items: center;
-            flex: 0 0 25px;
-            border-radius: 9px;
-            background: #f4f7fb;
-            color: #50637b;
-          }
-
-          .categorias-led button.ativo .categoria-led__icone {
-            background: rgba(255,255,255,.14);
-            color: #fff;
-            box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);
-          }
-
-          .categoria-led__letra {
-            font-size: .72rem;
-            line-height: 1;
-            font-weight: 950;
-            letter-spacing: .01em;
-          }
-
-          @keyframes categoriaLedMove {
-            from { background-position: 140% 0; }
-            to { background-position: -120% 0; }
-          }
-
-          @media (prefers-reduced-motion: reduce) {
-            .categorias-led button.ativo::before {
-              animation: none !important;
-            }
-          }
-
-          @media (max-width: 600px) {
-            .conteudo {
-              padding-top: 0 !important;
-            }
-
-            .hero {
-              min-height: 215px !important;
-              max-height: 215px !important;
-              margin-bottom: 42px !important;
-            }
-
-            .hero-store-card {
-              right: 10px !important;
-              bottom: -36px !important;
-              left: 10px !important;
-              min-height: 74px !important;
-              padding: 10px 12px !important;
-              border-radius: 17px !important;
-            }
-
-            .hero-store-card__logo {
-              width: 50px !important;
-              height: 50px !important;
-              flex-basis: 50px !important;
-            }
-
-            .hero-store-card__texto h1 {
-              font-size: 1rem !important;
-            }
-
-            .hero-clean__status,
-            .hero-clean__tempo {
-              min-height: 25px !important;
-              padding: 0 8px !important;
-              font-size: .65rem !important;
-            }
-
-            .modal-produto .modal-produto__midia {
-              max-height: 260px !important;
-            }
-
-            .modal-produto .modal-produto__midia img {
-              object-fit: contain !important;
-              background: #fff !important;
-            }
-
-            .modal-produto {
-              max-height: 92dvh !important;
-              display: flex !important;
-              flex-direction: column !important;
-              overflow: hidden !important;
-              padding-bottom: 0 !important;
-            }
-
-            .modal-produto__midia {
-              flex: 0 0 auto !important;
-            }
-
-            .modal-produto__conteudo {
-              flex: 1 1 auto !important;
-              min-height: 0 !important;
-              overflow-y: auto !important;
-              padding-bottom: 0 !important;
-              overscroll-behavior: contain;
-            }
-
-            .modal-produto__rodape {
-              position: sticky !important;
-              z-index: 30 !important;
-              bottom: 0 !important;
-              display: grid !important;
-              grid-template-columns: 108px minmax(0, 1fr) !important;
-              gap: 8px !important;
-              margin: 18px -16px 0 !important;
-              padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) !important;
-              border-top: 1px solid #e7ebf2 !important;
-              background: rgba(255,255,255,.99) !important;
-              box-shadow: 0 -8px 22px rgba(20,34,51,.08) !important;
-              backdrop-filter: blur(12px);
-            }
-
-            .adicionar-produto {
-              min-height: 52px !important;
-              border-radius: 14px !important;
-            }
-
-            .quantidade-produto {
-              min-height: 52px !important;
-              border-radius: 14px !important;
-            }
-
-            .busca {
-              position: relative;
-              z-index: 5;
-              margin-top: 0 !important;
-              margin-bottom: 12px !important;
-              min-height: 52px !important;
-              border: 1px solid rgba(205,214,226,.82) !important;
-              border-radius: 16px !important;
-              background: rgba(255,255,255,.96) !important;
-              box-shadow: 0 10px 30px rgba(24,35,52,.12) !important;
-              backdrop-filter: blur(12px);
-            }
-
-            .busca input {
-              font-size: .93rem !important;
-            }
-
-            .categorias-filtro {
-              margin: 0 -6px 24px !important;
-              padding: 4px 6px 8px !important;
-              gap: 8px !important;
-              overflow-x: auto;
-              scroll-snap-type: x proximity;
-            }
-
-            .categorias-filtro button {
-              min-height: 46px;
-              padding: 0 13px 0 10px;
-              border-color: #d7dfeb !important;
-              background: rgba(255,255,255,.94) !important;
-              color: #182235 !important;
-              font-size: .8rem;
-              font-weight: 850;
-              box-shadow: 0 5px 14px rgba(17,31,48,.06);
-              scroll-snap-align: start;
-            }
-
-            .categorias-filtro button.ativo {
-              border-color: var(--cor-loja) !important;
-              background: linear-gradient(135deg, var(--cor-loja), color-mix(in srgb, var(--cor-loja) 78%, #7b3cff)) !important;
-              color: #fff !important;
-              box-shadow: 0 8px 18px color-mix(in srgb, var(--cor-loja) 24%, transparent) !important;
-              transform: translateY(-1px);
-            }
-
-            .secao {
-              margin-top: 0 !important;
-              padding-top: 0 !important;
-            }
-
-            .secao__titulo {
-              margin-bottom: 14px !important;
-              padding: 0 2px !important;
-              align-items: flex-end !important;
-            }
-
-            .secao__titulo h2 {
-              margin: 0 !important;
-              color: #121a2a !important;
-              font-size: 1.28rem !important;
-              line-height: 1.1 !important;
-            }
-
-            .secao__titulo p {
-              margin-top: 5px !important;
-              color: #7b8aa2 !important;
-              font-size: .82rem !important;
-            }
-
-            .secao__titulo > span {
-              display: none !important;
-            }
-
-            .produtos {
-              display: grid !important;
-              gap: 12px !important;
-            }
-
-            .produto {
-              min-height: 126px !important;
-              grid-template-columns: minmax(0,1fr) 104px !important;
-              gap: 12px !important;
-              padding: 14px !important;
-              border: 1px solid #e1e7ef !important;
-              border-radius: 20px !important;
-              background:
-                linear-gradient(145deg, rgba(255,255,255,.99), rgba(248,250,253,.98)) !important;
-              box-shadow:
-                0 8px 20px rgba(20,34,51,.07),
-                inset 0 1px 0 rgba(255,255,255,.9) !important;
-              overflow: hidden;
-            }
-
-            .produto:active {
-              transform: scale(.992);
-            }
-
-            .produto__texto {
-              align-self: stretch !important;
-              display: flex !important;
-              flex-direction: column !important;
-              min-width: 0;
-            }
-
-            .produto__texto .destaque {
-              width: max-content;
-              margin-bottom: 7px !important;
-              padding: 4px 8px !important;
-              border-radius: 999px !important;
-              background: color-mix(in srgb, var(--cor-loja) 10%, #fff) !important;
-              color: var(--cor-loja) !important;
-              font-size: .62rem !important;
-              letter-spacing: .05em;
-            }
-
-            .produto__texto h3 {
-              margin: 0 0 5px !important;
-              color: #111a2a !important;
-              font-size: .98rem !important;
-              line-height: 1.15 !important;
-            }
-
-            .produto__texto p {
-              display: -webkit-box !important;
-              margin: 0 0 8px !important;
-              overflow: hidden !important;
-              color: #7d8ba1 !important;
-              font-size: .78rem !important;
-              line-height: 1.35 !important;
-              -webkit-box-orient: vertical;
-              -webkit-line-clamp: 2;
-            }
-
-            .produto__texto b {
-              margin-top: auto !important;
-              color: #111a2a !important;
-              font-size: .92rem !important;
-            }
-
-            .produto__imagem {
-              width: 104px !important;
-              height: 98px !important;
-              align-self: center !important;
-              border: 1px solid #eef1f5 !important;
-              border-radius: 16px !important;
-              background: #f8fafc !important;
-              box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
-              overflow: hidden;
-            }
-
-            .produto__imagem img {
-              width: 100% !important;
-              height: 100% !important;
-              object-fit: cover !important;
-            }
-
-            .produto__seta {
-              right: 8px !important;
-              bottom: 8px !important;
-              width: 17px !important;
-              color: #9ba9ba !important;
-            }
-
-            .barra-carrinho {
-              right: 12px !important;
-              bottom: 12px !important;
-              left: 12px !important;
-              width: auto !important;
-              min-height: 58px !important;
-              border-radius: 18px !important;
-              box-shadow: 0 16px 35px color-mix(in srgb, var(--cor-loja) 28%, rgba(0,0,0,.22)) !important;
-            }
-
-            .barra-carrinho .bolha {
-              width: 34px !important;
-              height: 34px !important;
-              border-radius: 10px !important;
-              background: rgba(255,255,255,.16) !important;
-            }
-
-
-            .conteudo {
-              padding-bottom: 98px !important;
-            }
-
-
-            .vitrine-destaques {
-              margin: 0 -2px 24px !important;
-              padding: 14px 10px 12px !important;
-              border-radius: 20px !important;
-            }
-
-            .vitrine-destaques__topo {
-              margin-bottom: 11px !important;
-            }
-
-            .vitrine-destaques h2 {
-              font-size: 1.17rem !important;
-            }
-
-            .vitrine-destaques__lista {
-              grid-auto-columns: minmax(205px, 74vw) !important;
-              margin-right: -12px;
-              padding-right: 12px;
-            }
-
-            .vitrine-destaques__card {
-              grid-template-rows: 128px auto !important;
-              border-radius: 18px !important;
-            }
-
-            .secao + .secao {
-              margin-top: 22px !important;
-            }
-
-            .secao {
-              position: relative;
-              margin-right: -10px !important;
-              margin-left: -10px !important;
-              padding: 16px 10px 18px !important;
-              border-top: 1px solid #e4eaf1 !important;
-              border-bottom: 1px solid #e4eaf1 !important;
-              background:
-                linear-gradient(180deg, rgba(244,247,251,.98), rgba(239,244,249,.92)) !important;
-            }
-
-            .secao:first-of-type {
-              border-top: 0 !important;
-              border-radius: 18px 18px 0 0;
-            }
-
-            .secao__titulo {
-              position: relative;
-              margin-bottom: 13px !important;
-              padding: 0 2px 0 10px !important;
-            }
-
-            .secao__titulo::before {
-              content: '';
-              position: absolute;
-              top: 1px;
-              bottom: 1px;
-              left: 0;
-              width: 4px;
-              border-radius: 999px;
-              background: var(--cor-loja);
-            }
-
-            .secao__titulo h2 {
-              font-size: 1.18rem !important;
-              letter-spacing: -.02em;
-            }
-
-            .secao__titulo p {
-              margin-top: 4px !important;
-            }
-
-            .produto {
-              border: 1px solid rgba(217,225,235,.96) !important;
-              border-radius: 18px !important;
-              background: rgba(255,255,255,.98) !important;
-              box-shadow: 0 7px 18px rgba(20,34,51,.065) !important;
-            }
-
-            .produto__imagem {
-              border-radius: 17px !important;
-            }
-
-            .loja-mobile-nav {
-              position: fixed;
-              z-index: 90;
-              right: 8px;
-              bottom: 8px;
-              left: 8px;
-              display: grid;
-              grid-template-columns: repeat(4, 1fr);
-              min-height: 66px;
-              padding: 6px 5px max(6px, env(safe-area-inset-bottom));
-              border: 1px solid rgba(216,224,234,.96);
-              border-radius: 21px;
-              background: rgba(255,255,255,.97);
-              box-shadow: 0 16px 42px rgba(20,34,51,.20);
-              backdrop-filter: blur(16px);
-            }
-
-            .loja-mobile-nav button {
-              position: relative;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              gap: 4px;
-              min-width: 0;
-              border: 0;
-              border-radius: 15px;
-              background: transparent;
-              color: #7a8798;
-              font: inherit;
-            }
-
-            .loja-mobile-nav button span {
-              font-size: .66rem;
-              font-weight: 800;
-            }
-
-            .loja-mobile-nav button.ativo,
-            .loja-mobile-nav button.tem-itens {
-              color: var(--cor-loja);
-            }
-
-            .loja-mobile-nav button.ativo {
-              background: color-mix(in srgb, var(--cor-loja) 9%, #fff);
-            }
-
-            .loja-mobile-nav button b {
-              position: absolute;
-              top: 3px;
-              left: calc(50% + 7px);
-              display: grid;
-              place-items: center;
-              min-width: 18px;
-              height: 18px;
-              padding: 0 4px;
-              border: 2px solid #fff;
-              border-radius: 999px;
-              background: var(--cor-loja);
-              color: #fff;
-              font-size: .58rem;
-            }
-
-            .barra-carrinho {
-              display: none !important;
-            }
-          }
-
-          @media (prefers-reduced-motion: reduce) {
-            .vitrine-destaques__card {
-              animation: none !important;
-            }
-          }
-
-          .vitrine-destaques {
-            margin: 8px 0 26px !important;
-            padding: 0 !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            overflow: visible !important;
-          }
-
-          .vitrine-destaques::after {
-            display: none !important;
-          }
-
-          .vitrine-destaques__topo {
-            margin-bottom: 12px !important;
-            padding: 0 2px !important;
-          }
-
-          .vitrine-destaques__selo {
-            min-height: 24px !important;
-            padding: 0 9px !important;
-            border: 1px solid #e0e7f1 !important;
-            background: #f5f7fb !important;
-            color: #52647d !important;
-            box-shadow: none !important;
-          }
-
-          .vitrine-destaques h2 {
-            margin-top: 6px !important;
-            font-size: 1.17rem !important;
-          }
-
-          .vitrine-destaques p {
-            max-width: 320px;
-            font-size: .76rem !important;
-          }
-
-          .vitrine-destaques__lista {
-            grid-auto-columns: minmax(270px, 82vw) !important;
-            gap: 12px !important;
-            padding: 0 10px 8px 2px !important;
-          }
-
-          .vitrine-destaques__card {
-            grid-template-rows: 150px auto !important;
-            padding: 0 !important;
-            border: 1px solid #e1e7ef !important;
-            border-radius: 22px !important;
-            background: #fff !important;
-            box-shadow: 0 12px 26px rgba(20,34,51,.08) !important;
-            animation: none !important;
-          }
-
-          .vitrine-destaques__card::before,
-          .vitrine-destaques__card::after {
-            display: none !important;
-          }
-
-          .vitrine-destaques__imagem {
-            margin: 0 !important;
-            border-radius: 21px 21px 0 0 !important;
-          }
-
-          .vitrine-destaques__imagem::after {
-            content: '';
-            position: absolute;
-            inset: auto 0 0 0;
-            height: 42%;
-            pointer-events: none;
-            background: linear-gradient(180deg, transparent, rgba(9,16,27,.30));
-          }
-
-          .vitrine-destaques__badge {
-            top: 11px !important;
-            left: 11px !important;
-            min-height: 24px !important;
-            padding: 0 9px !important;
-            border: 0 !important;
-            background: rgba(10,18,29,.78) !important;
-            font-size: .58rem !important;
-            backdrop-filter: blur(10px);
-          }
-
-          .vitrine-destaques__conteudo {
-            margin: 0 !important;
-            padding: 12px 14px 14px !important;
-            border-radius: 0 0 21px 21px !important;
-          }
-
-          .vitrine-destaques__conteudo > strong {
-            font-size: .98rem !important;
-          }
-
-          .vitrine-destaques__conteudo > small {
-            min-height: 30px !important;
-            font-size: .71rem !important;
-          }
-
-          .vitrine-destaques__precos {
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 4px !important;
-          }
-
-          .vitrine-destaques__precos b {
-            font-size: 1rem !important;
-          }
-
-          .vitrine-destaques__precos::after {
-            content: '+';
-            width: 30px;
-            height: 30px;
-            display: grid;
-            place-items: center;
-            border-radius: 10px;
-            background: color-mix(in srgb, var(--cor-loja) 10%, #fff);
-            color: var(--cor-loja);
-            font-size: 1.1rem;
-            font-weight: 900;
-          }
-
-          .categorias-clean {
-            position: relative;
-            padding-bottom: 8px !important;
-          }
-
-          .categorias-clean::after {
-            content: '';
-            position: absolute;
-            right: 0;
-            bottom: 0;
-            left: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, #e7edf4 15%, #e7edf4 85%, transparent);
-          }
-
-          @media (max-width: 600px) {
-            .hero {
-              min-height: 215px !important;
-              max-height: 215px !important;
-              margin-bottom: 0 !important;
-            }
-
-            .hero-signature {
-              right: 12px !important;
-              bottom: 12px !important;
-              left: 12px !important;
-              grid-template-columns: 48px minmax(0,1fr) !important;
-              padding: 9px 10px !important;
-              border-radius: 16px !important;
-            }
-
-            .hero-signature__logo {
-              width: 48px !important;
-              height: 48px !important;
-            }
-
-            .hero-signature__texto h1 {
-              font-size: 1rem !important;
-            }
-
-            .hero-signature__meta {
-              font-size: .62rem !important;
-            }
-
-            .loja-identidade {
-              grid-template-columns: 52px minmax(0,1fr) !important;
-              margin: 10px 0 10px !important;
-              padding: 10px 11px !important;
-              border-radius: 16px !important;
-            }
-
-            .loja-identidade__logo {
-              width: 52px !important;
-              height: 52px !important;
-            }
-
-            .loja-identidade__texto h1 {
-              font-size: 1rem !important;
-            }
-
-            .busca {
-              margin-top: 0 !important;
-              margin-bottom: 12px !important;
-              border-radius: 15px !important;
-            }
-
-            .categorias-filtro {
-              margin-bottom: 22px !important;
-            }
-
-            .vitrine-destaques {
-              margin-top: 0 !important;
-            }
-          }
-
-          /* LED dos cards de destaque: mantém o layout atual e restaura a luz correndo na borda */
-          .vitrine-destaques__card {
-            --led-angle: 0deg;
-            padding: 2px !important;
-            border: 0 !important;
-            background:
-              conic-gradient(
-                from var(--led-angle),
-                transparent 0deg 238deg,
-                color-mix(in srgb, var(--cor-loja) 88%, #5b5cff) 270deg,
-                #a8c7ff 296deg,
-                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 314deg,
-                transparent 342deg 360deg
-              ) !important;
-            box-shadow:
-              0 12px 26px rgba(20,34,51,.08),
-              0 0 15px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;
-            animation: ledCardRound 3.8s linear infinite !important;
-          }
-
-          .vitrine-destaques__imagem {
-            margin: 0 !important;
-            border-radius: 20px 20px 0 0 !important;
-          }
-
-          .vitrine-destaques__conteudo {
-            margin: 0 !important;
-            border-radius: 0 0 20px 20px !important;
-            background: #fff !important;
-          }
-
-          @media (prefers-reduced-motion: reduce) {
-            .vitrine-destaques__card {
-              animation: none !important;
-            }
-          }
-
-
-          /* RESTAURA APENAS O LED DAS CATEGORIAS */
-          .categorias-clean button {
-            position: relative !important;
-            isolation: isolate !important;
-            overflow: hidden !important;
-            border: 1px solid #dce4ee !important;
-            background: rgba(255,255,255,.97) !important;
-            color: #1b2638 !important;
-          }
-
-          .categorias-clean button::before {
-            content: '' !important;
-            display: block !important;
-            position: absolute !important;
-            z-index: -2 !important;
-            inset: -1px !important;
-            border-radius: inherit !important;
-            background:
-              conic-gradient(
-                from var(--cat-led-angle, 0deg),
-                transparent 0deg 245deg,
-                color-mix(in srgb, var(--cor-loja) 90%, #536dff) 272deg,
-                #a9c7ff 298deg,
-                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 318deg,
-                transparent 345deg 360deg
-              ) !important;
-            opacity: 0 !important;
-          }
-
-          .categorias-clean button::after {
-            content: '' !important;
-            display: block !important;
-            position: absolute !important;
-            z-index: -1 !important;
-            inset: 2px !important;
-            border-radius: calc(999px - 2px) !important;
-            background: rgba(255,255,255,.98) !important;
-          }
-
-          .categorias-clean button.ativo {
-            border-color: transparent !important;
-            background: transparent !important;
-            color: var(--cor-loja) !important;
-            box-shadow:
-              0 6px 14px color-mix(in srgb, var(--cor-loja) 12%, transparent),
-              0 0 12px color-mix(in srgb, var(--cor-loja) 8%, transparent) !important;
-          }
-
-          .categorias-clean button.ativo::before {
-            opacity: 1 !important;
-            animation: categoriaLedVolta 3.2s linear infinite !important;
-          }
-
-          .categorias-clean button.ativo::after {
-            background: color-mix(in srgb, var(--cor-loja) 7%, #fff) !important;
-          }
-
-          @keyframes categoriaLedVolta {
-            from { --cat-led-angle: 0deg; }
-            to { --cat-led-angle: 360deg; }
-          }
-
-          @media (prefers-reduced-motion: reduce) {
-            .categorias-clean button.ativo::before {
-              animation: none !important;
-            }
-          }
-
-
-          /* CARD DE VIDRO DA LOJA: sobrepõe levemente o GIF sem esconder o fundo */
-          .loja-identidade {
-            position: relative !important;
-            z-index: 12 !important;
-            grid-template-columns: 58px minmax(0, 1fr) !important;
-            gap: 12px !important;
-            margin: -44px 10px 14px !important;
-            padding: 12px 14px !important;
-            border: 1px solid rgba(255,255,255,.28) !important;
-            border-radius: 20px !important;
-            background:
-              linear-gradient(
-                135deg,
-                rgba(31, 22, 22, .54),
-                rgba(43, 31, 30, .38)
-              ) !important;
-            box-shadow:
-              0 14px 34px rgba(20, 12, 12, .22),
-              inset 0 1px 0 rgba(255,255,255,.18) !important;
-            backdrop-filter: blur(13px) saturate(125%) !important;
-            -webkit-backdrop-filter: blur(13px) saturate(125%) !important;
-            overflow: hidden !important;
-          }
-
-          .loja-identidade::before {
-            content: '' !important;
-            position: absolute !important;
-            inset: 0 !important;
-            pointer-events: none !important;
-            border-radius: inherit !important;
-            background:
-              radial-gradient(circle at 18% 20%, rgba(255,255,255,.12), transparent 34%),
-              linear-gradient(115deg, rgba(255,255,255,.07), transparent 42%) !important;
-          }
-
-          .loja-identidade__logo,
-          .loja-identidade__texto {
-            position: relative !important;
-            z-index: 2 !important;
-          }
-
-          .loja-identidade__logo {
-            width: 58px !important;
-            height: 58px !important;
-            border: 1px solid rgba(255,255,255,.32) !important;
-            border-radius: 16px !important;
-            background: rgba(8,12,18,.62) !important;
-            box-shadow:
-              0 8px 18px rgba(0,0,0,.18),
-              0 0 0 3px rgba(255,255,255,.04) !important;
-          }
-
-          .loja-identidade__texto > span {
-            color: rgba(255,255,255,.66) !important;
-          }
-
-          .loja-identidade__texto h1 {
-            color: #fff !important;
-            text-shadow: 0 2px 10px rgba(0,0,0,.28) !important;
-          }
-
-          .loja-identidade__meta span {
-            border: 1px solid rgba(255,255,255,.14) !important;
-            background: rgba(255,255,255,.10) !important;
-            color: rgba(255,255,255,.88) !important;
-            backdrop-filter: blur(8px) !important;
-          }
-
-          .loja-identidade__meta span.aberto {
-            border-color: rgba(59, 220, 128, .20) !important;
-            background: rgba(20, 120, 62, .34) !important;
-            color: #d8ffe7 !important;
-          }
-
-          .loja-identidade__meta span.fechado {
-            border-color: rgba(255, 107, 107, .22) !important;
-            background: rgba(140, 38, 45, .34) !important;
-            color: #ffe1e3 !important;
-          }
-
-          @media (max-width: 600px) {
-            .loja-identidade {
-              grid-template-columns: 52px minmax(0,1fr) !important;
-              margin: -42px 8px 13px !important;
-              padding: 10px 11px !important;
-              border-radius: 18px !important;
-            }
-
-            .loja-identidade__logo {
-              width: 52px !important;
-              height: 52px !important;
-            }
-
-            .loja-identidade__texto h1 {
-              font-size: 1rem !important;
-            }
-
-            .loja-identidade__texto > span {
-              font-size: .54rem !important;
-            }
-
-            .loja-identidade__meta span {
-              min-height: 24px !important;
-              padding: 0 7px !important;
-              font-size: .63rem !important;
-            }
-
-            .busca {
-              margin-top: 0 !important;
-            }
-          }
-
-
-          /* VIDRO DE PONTA A PONTA */
-          .loja-identidade {
-            width: 100% !important;
-            max-width: none !important;
-            box-sizing: border-box !important;
-            margin: -44px 0 14px !important;
-            border-left: 0 !important;
-            border-right: 0 !important;
-            border-radius: 18px 18px 0 0 !important;
-          }
-
-          @media (max-width: 600px) {
-            .loja-identidade {
-              width: 100% !important;
-              margin: -42px 0 13px !important;
-              padding-left: 14px !important;
-              padding-right: 14px !important;
-              border-radius: 18px 18px 0 0 !important;
-            }
-          }
-
-
-          /* FORÇA O VIDRO A ENCOSTAR NAS DUAS BORDAS DO CARDÁPIO */
-          .loja-identidade {
-            width: calc(100% + 24px) !important;
-            max-width: none !important;
-            margin-left: -12px !important;
-            margin-right: -12px !important;
-            box-sizing: border-box !important;
-            border-left: 0 !important;
-            border-right: 0 !important;
-            border-radius: 0 0 18px 18px !important;
-          }
-
-          @media (max-width: 600px) {
-            .loja-identidade {
-              width: calc(100% + 24px) !important;
-              margin-left: -12px !important;
-              margin-right: -12px !important;
-              padding-left: 16px !important;
-              padding-right: 16px !important;
-              border-radius: 0 0 18px 18px !important;
-            }
-          }
-
-
-          /* MODELOS VISUAIS PRONTOS KODVEXA FOOD */
-
-          .app.modelo-vitrine .conteudo {
-            background:
-              linear-gradient(180deg, #fffaf5 0%, #f6efe8 100%) !important;
-          }
-
-          .app.modelo-vitrine .produto,
-          .app.modelo-vitrine .vitrine-destaques__card {
-            border-color: #efd9c8 !important;
-            border-radius: 22px !important;
-            box-shadow: 0 10px 24px rgba(92,50,22,.08) !important;
-          }
-
-          .app.modelo-vitrine .secao {
-            background:
-              linear-gradient(180deg, rgba(255,250,245,.98), rgba(247,239,232,.94)) !important;
-            border-color: #eadbce !important;
-          }
-
-          .app.modelo-vitrine .secao__titulo::before {
-            background: #d9611c !important;
-          }
-
-          .app.modelo-vitrine .categorias-clean button.ativo,
-          .app.modelo-vitrine .categorias-filtro button.ativo {
-            color: #b94813 !important;
-            border-color: #f0b18d !important;
-            background: #fff0e5 !important;
-          }
-
-          .app.modelo-vitrine .vitrine-destaques__precos b {
-            color: #c64e16 !important;
-          }
-
-          .app.modelo-glass .conteudo {
-            background:
-              radial-gradient(circle at 50% 0%, rgba(88,129,190,.12), transparent 34%),
-              linear-gradient(180deg, #eef4fb, #e8eff7) !important;
-          }
-
-          .app.modelo-glass .busca,
-          .app.modelo-glass .produto,
-          .app.modelo-glass .vitrine-destaques__card,
-          .app.modelo-glass .loja-identidade {
-            border-color: rgba(139,162,190,.34) !important;
-            background: rgba(255,255,255,.74) !important;
-            box-shadow:
-              0 10px 28px rgba(36,57,82,.09),
-              inset 0 1px 0 rgba(255,255,255,.75) !important;
-            backdrop-filter: blur(14px) saturate(120%) !important;
-            -webkit-backdrop-filter: blur(14px) saturate(120%) !important;
-          }
-
-          .app.modelo-glass .secao {
-            background:
-              linear-gradient(180deg, rgba(240,246,252,.74), rgba(231,239,248,.70)) !important;
-            border-color: rgba(137,160,188,.26) !important;
-          }
-
-          .app.modelo-glass .categorias-clean button,
-          .app.modelo-glass .categorias-filtro button {
-            border-color: rgba(139,162,190,.34) !important;
-            background: rgba(255,255,255,.68) !important;
-            backdrop-filter: blur(10px) !important;
-          }
-
-          .app.modelo-glass .categorias-clean button.ativo,
-          .app.modelo-glass .categorias-filtro button.ativo {
-            border-color: color-mix(in srgb, var(--cor-loja) 40%, #9db0c6) !important;
-            background: color-mix(in srgb, var(--cor-loja) 8%, rgba(255,255,255,.72)) !important;
-          }
-
-
-          /* ===== MODELOS FOOD REAIS ===== */
-
-          .app.modelo-burger-house .conteudo {
-            background:
-              radial-gradient(circle at 50% 0%, rgba(255,99,26,.08), transparent 24%),
-              linear-gradient(180deg, #17110e 0%, #21150f 100%) !important;
-          }
-
-          .app.modelo-burger-house .busca,
-          .app.modelo-burger-house .produto,
-          .app.modelo-burger-house .vitrine-destaques__card,
-          .app.modelo-burger-house .secao {
-            border-color: rgba(255,129,55,.17) !important;
-            background: #251813 !important;
-            color: #fff !important;
-            box-shadow: 0 10px 26px rgba(0,0,0,.16) !important;
-          }
-
-          .app.modelo-burger-house .produto__texto h3,
-          .app.modelo-burger-house .produto__texto b,
-          .app.modelo-burger-house .secao__titulo h2,
-          .app.modelo-burger-house .vitrine-destaques h2,
-          .app.modelo-burger-house .vitrine-destaques__conteudo > strong {
-            color: #fff5ee !important;
-          }
-
-          .app.modelo-burger-house .produto__texto p,
-          .app.modelo-burger-house .secao__titulo p,
-          .app.modelo-burger-house .vitrine-destaques p,
-          .app.modelo-burger-house .vitrine-destaques__conteudo > small {
-            color: #b99f91 !important;
-          }
-
-          .app.modelo-burger-house .categorias-filtro button {
-            border-color: rgba(255,129,55,.22) !important;
-            background: #291a14 !important;
-            color: #e8d3c8 !important;
-          }
-
-          .app.modelo-burger-house .categorias-filtro button.ativo {
-            border-color: #ff6a1a !important;
-            background: #ff6a1a !important;
-            color: #fff !important;
-            box-shadow: 0 8px 18px rgba(255,106,26,.23) !important;
-          }
-
-          .app.modelo-burger-house .vitrine-destaques__precos b,
-          .app.modelo-burger-house .secao__titulo::before {
-            color: #ff7a2a !important;
-            background: #ff7a2a !important;
-          }
-
-          .app.modelo-gourmet .conteudo {
-            background:
-              linear-gradient(180deg, #fbf7f1 0%, #f3ece3 100%) !important;
-          }
-
-          .app.modelo-gourmet .produto,
-          .app.modelo-gourmet .vitrine-destaques__card {
-            border-color: #e8dccd !important;
-            border-radius: 16px !important;
-            background: #fffdf9 !important;
-            box-shadow: 0 9px 22px rgba(76,58,38,.07) !important;
-          }
-
-          .app.modelo-gourmet .secao {
-            border-color: #eadfd2 !important;
-            background: rgba(250,246,239,.90) !important;
-          }
-
-          .app.modelo-gourmet .secao__titulo::before {
-            background: #8c6c49 !important;
-          }
-
-          .app.modelo-gourmet .categorias-filtro button {
-            background: #fffdf9 !important;
-            border-color: #e6dacb !important;
-          }
-
-          .app.modelo-gourmet .categorias-filtro button.ativo {
-            background: #8c6c49 !important;
-            border-color: #8c6c49 !important;
-            color: #fff !important;
-          }
-
-          .app.modelo-gourmet .vitrine-destaques__precos b {
-            color: #7a5c3d !important;
-          }
-
-          .app.modelo-fast-food .conteudo {
-            background:
-              radial-gradient(circle at 12% 0%, rgba(255,96,40,.10), transparent 22%),
-              linear-gradient(180deg, #fffaf5 0%, #fff2e7 100%) !important;
-          }
-
-          .app.modelo-fast-food .produto,
-          .app.modelo-fast-food .vitrine-destaques__card {
-            border-color: #ffe0ce !important;
-            border-radius: 24px !important;
-            background: #fff !important;
-            box-shadow: 0 10px 24px rgba(255,91,38,.09) !important;
-          }
-
-          .app.modelo-fast-food .secao {
-            background: rgba(255,248,242,.95) !important;
-            border-color: #f8ddd0 !important;
-          }
-
-          .app.modelo-fast-food .secao__titulo::before {
-            background: #ff5426 !important;
-          }
-
-          .app.modelo-fast-food .categorias-filtro button.ativo {
-            background: linear-gradient(135deg, #ff4928, #ff8a1d) !important;
-            border-color: transparent !important;
-            color: #fff !important;
-            box-shadow: 0 8px 18px rgba(255,80,35,.20) !important;
-          }
-
-          .app.modelo-fast-food .vitrine-destaques__precos b {
-            color: #ef421e !important;
-          }
-
-          .app.modelo-night-food .conteudo {
-            background:
-              radial-gradient(circle at 50% 0%, rgba(68,93,172,.16), transparent 28%),
-              linear-gradient(180deg, #0b1220 0%, #111a2b 100%) !important;
-          }
-
-          .app.modelo-night-food .busca,
-          .app.modelo-night-food .produto,
-          .app.modelo-night-food .vitrine-destaques__card,
-          .app.modelo-night-food .loja-identidade {
-            border-color: rgba(123,145,211,.20) !important;
-            background: rgba(19,29,49,.76) !important;
-            box-shadow:
-              0 12px 28px rgba(0,0,0,.20),
-              inset 0 1px 0 rgba(255,255,255,.05) !important;
-            backdrop-filter: blur(14px) !important;
-          }
-
-          .app.modelo-night-food .produto__texto h3,
-          .app.modelo-night-food .produto__texto b,
-          .app.modelo-night-food .secao__titulo h2,
-          .app.modelo-night-food .vitrine-destaques h2,
-          .app.modelo-night-food .vitrine-destaques__conteudo > strong {
-            color: #f4f7ff !important;
-          }
-
-          .app.modelo-night-food .produto__texto p,
-          .app.modelo-night-food .secao__titulo p,
-          .app.modelo-night-food .vitrine-destaques p,
-          .app.modelo-night-food .vitrine-destaques__conteudo > small {
-            color: #91a0bd !important;
-          }
-
-          .app.modelo-night-food .secao {
-            border-color: rgba(122,145,211,.15) !important;
-            background: rgba(14,23,39,.72) !important;
-          }
-
-          .app.modelo-night-food .categorias-filtro button {
-            border-color: rgba(123,145,211,.20) !important;
-            background: rgba(255,255,255,.07) !important;
-            color: #cbd5ea !important;
-          }
-
-          .app.modelo-night-food .categorias-filtro button.ativo {
-            border-color: #6672ff !important;
-            background: #5966f2 !important;
-            color: #fff !important;
-            box-shadow: 0 0 18px rgba(89,102,242,.24) !important;
-          }
-
-          .app.modelo-clean-food .conteudo {
-            background: #f6f8fb !important;
-          }
-
-          .app.modelo-clean-food .produto,
-          .app.modelo-clean-food .vitrine-destaques__card {
-            border-color: #e5eaf0 !important;
-            border-radius: 18px !important;
-            background: #fff !important;
-            box-shadow: none !important;
-          }
-
-          .app.modelo-clean-food .secao {
-            background: #f6f8fb !important;
-            border-color: #e8edf2 !important;
-          }
-
-          .app.modelo-clean-food .secao__titulo::before {
-            background: #94a3b8 !important;
-          }
-
-          .app.modelo-clean-food .categorias-filtro button {
-            box-shadow: none !important;
-          }
-
-          .app.modelo-clean-food .categorias-filtro button.ativo {
-            background: #111827 !important;
-            border-color: #111827 !important;
-            color: #fff !important;
-            box-shadow: none !important;
-          }
-
-
-
-          /* Marmitaria & Frango: visual quente e claro para almoço */
-          .app.modelo-marmitaria .conteudo {
-            background:
-              linear-gradient(180deg, #fff9f2 0%, #f7eee5 100%) !important;
-          }
-
-          .app.modelo-marmitaria .produto,
-          .app.modelo-marmitaria .vitrine-destaques__card {
-            border-color: #ead8c7 !important;
-            background: #fffdf9 !important;
-            border-radius: 18px !important;
-            box-shadow: 0 7px 20px rgba(105,54,29,.07) !important;
-          }
-
-          .app.modelo-marmitaria .categoria-titulo::before {
-            background: #b94d25 !important;
-          }
-
-          .app.modelo-marmitaria .categorias button.ativo {
-            background: #b94d25 !important;
-            color: #fff !important;
-            border-color: #b94d25 !important;
-          }
-
-          .app.modelo-marmitaria .vitrine-destaques {
-            background: linear-gradient(145deg, #fff7ed, #fffdf9) !important;
-            border-color: #ead8c7 !important;
-          }
-
-          /* Padrão oficial KODVEXA: mantém o layout principal aprovado */
-          .app.modelo-kodvexa .conteudo {
-            background:
-              linear-gradient(180deg, #f3f6fa 0%, #edf2f7 100%) !important;
-          }
-
-          .app.modelo-kodvexa .produto,
-          .app.modelo-kodvexa .vitrine-destaques__card {
-            border-color: #e1e7ef !important;
-            background: #fff !important;
-          }
-
-
-          .loja-identidade__descricao {
-            margin: 0 0 7px !important;
-            display: -webkit-box;
-            overflow: hidden;
-            color: rgba(255,255,255,.72) !important;
-            font-size: .68rem !important;
-            line-height: 1.35 !important;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-          }
-
-          @media (max-width: 600px) {
-            .loja-identidade__descricao {
-              margin-bottom: 6px !important;
-              font-size: .64rem !important;
-              -webkit-line-clamp: 1;
-            }
-          }
-
-
-          /* Card da loja em vidro, deixando o GIF/capa aparecer por trás */
-          .loja-identidade {
-            background:
-              linear-gradient(135deg,
-                rgba(15, 18, 24, .58),
-                rgba(28, 30, 36, .36)
-              ) !important;
-            border: 1px solid rgba(255,255,255,.18) !important;
-            box-shadow:
-              0 12px 28px rgba(0,0,0,.18),
-              inset 0 1px 0 rgba(255,255,255,.12) !important;
-            backdrop-filter: blur(13px) saturate(135%) !important;
-            -webkit-backdrop-filter: blur(13px) saturate(135%) !important;
-          }
-
-          .loja-identidade::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            border-radius: inherit;
-            background:
-              linear-gradient(180deg,
-                rgba(255,255,255,.10),
-                rgba(255,255,255,.015) 46%,
-                rgba(0,0,0,.06)
-              );
-          }
-
-          .loja-identidade > * {
-            position: relative;
-            z-index: 1;
-          }
-
-          .loja-identidade__texto > span,
-          .loja-identidade__texto h1,
-          .loja-identidade__descricao {
-            text-shadow: 0 1px 5px rgba(0,0,0,.45);
-          }
-
-
-          /* RESTAURA LED DOS CARDS DE DESTAQUE */
-          .vitrine-destaques__card {
-            --led-angle: 0deg !important;
-            position: relative !important;
-            isolation: isolate !important;
-            padding: 2px !important;
-            border: 0 !important;
-            background:
-              conic-gradient(
-                from var(--led-angle),
-                transparent 0deg 238deg,
-                color-mix(in srgb, var(--cor-loja) 88%, #5b5cff) 270deg,
-                #a8c7ff 296deg,
-                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 316deg,
-                transparent 344deg 360deg
-              ) !important;
-            box-shadow:
-              0 12px 26px rgba(20,34,51,.08),
-              0 0 16px color-mix(in srgb, var(--cor-loja) 11%, transparent) !important;
-            animation: ledCardRound 3.8s linear infinite !important;
-          }
-
-          .vitrine-destaques__card::before {
-            content: '' !important;
-            display: block !important;
-            position: absolute !important;
-            inset: 2px !important;
-            z-index: -1 !important;
-            border-radius: 20px !important;
-            background: #fff !important;
-          }
-
-          .vitrine-destaques__card::after {
-            content: '' !important;
-            display: block !important;
-            position: absolute !important;
-            inset: 0 !important;
-            pointer-events: none !important;
-            border-radius: inherit !important;
-            box-shadow:
-              inset 0 0 0 1px rgba(255,255,255,.45),
-              0 0 18px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;
-          }
-
-          .vitrine-destaques__imagem {
-            position: relative !important;
-            z-index: 1 !important;
-            margin: 0 !important;
-            border-radius: 20px 20px 0 0 !important;
-          }
-
-          .vitrine-destaques__conteudo {
-            position: relative !important;
-            z-index: 1 !important;
-            margin: 0 !important;
-            border-radius: 0 0 20px 20px !important;
-            background: #fff !important;
-          }
-
-          @keyframes ledCardRound {
-            to { --led-angle: 360deg; }
-          }
-
-          @media (prefers-reduced-motion: reduce) {
-            .vitrine-destaques__card {
-              animation: none !important;
-            }
-          }
-
-
-          /* LED ROBUSTO DOS DESTAQUES: gira a luz de verdade, sem depender de @property */
-          .vitrine-destaques__card {
-            position: relative !important;
-            isolation: isolate !important;
-            overflow: hidden !important;
-            padding: 2px !important;
-            border: 0 !important;
-            border-radius: 22px !important;
-            background: #ffffff !important;
-            box-shadow:
-              0 12px 26px rgba(20,34,51,.08),
-              0 0 18px color-mix(in srgb, var(--cor-loja) 14%, transparent) !important;
-            animation: none !important;
-          }
-
-          .vitrine-destaques__card::before {
-            content: "" !important;
-            display: block !important;
-            position: absolute !important;
-            z-index: 0 !important;
-            top: -55% !important;
-            left: -35% !important;
-            width: 170% !important;
-            height: 210% !important;
-            border-radius: 50% !important;
-            background:
-              conic-gradient(
-                from 0deg,
-                transparent 0deg 245deg,
-                #4f46e5 268deg,
-                #67a8ff 286deg,
-                #c084fc 304deg,
-                transparent 326deg 360deg
-              ) !important;
-            transform-origin: 50% 50% !important;
-            animation: kodvexaLedGirar 2.7s linear infinite !important;
-            pointer-events: none !important;
-          }
-
-          .vitrine-destaques__card::after {
-            content: "" !important;
-            display: block !important;
-            position: absolute !important;
-            z-index: 1 !important;
-            inset: 2px !important;
-            border-radius: 20px !important;
-            background: #fff !important;
-            box-shadow: inset 0 0 0 1px rgba(255,255,255,.45) !important;
-            pointer-events: none !important;
-          }
-
-          .vitrine-destaques__imagem,
-          .vitrine-destaques__conteudo {
-            position: relative !important;
-            z-index: 2 !important;
-          }
-
-          .vitrine-destaques__imagem {
-            margin: 0 !important;
-            border-radius: 20px 20px 0 0 !important;
-            overflow: hidden !important;
-          }
-
-          .vitrine-destaques__conteudo {
-            margin: 0 !important;
-            border-radius: 0 0 20px 20px !important;
-            background: #fff !important;
-          }
-
-          @keyframes kodvexaLedGirar {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-
-          @media (prefers-reduced-motion: reduce) {
-            .vitrine-destaques__card::before {
-              animation: none !important;
-            }
-          }
-
-        `}</style>
+        <style>{"          .categorias-filtro {\n            display: flex;\n            gap: 9px;\n            overflow-x: auto;\n            padding: 2px 0 6px;\n            scrollbar-width: none;\n          }\n\n          .categorias-filtro::-webkit-scrollbar {\n            display: none;\n          }\n\n          .loja-mobile-nav {\n            display: none;\n          }\n\n\n          .hero {\n            position: relative;\n            overflow: hidden;\n          }\n\n          .hero__overlay {\n            background:\n              linear-gradient(180deg, rgba(7,12,20,.00) 38%, rgba(7,12,20,.10) 66%, rgba(7,12,20,.48) 100%) !important;\n          }\n\n          .loja-identidade {\n            display: grid;\n            grid-template-columns: 58px minmax(0,1fr);\n            gap: 12px;\n            align-items: center;\n            margin: 0 0 12px;\n            padding: 12px 14px;\n            border: 1px solid #e1e7ef;\n            border-radius: 18px;\n            background: rgba(255,255,255,.98);\n            box-shadow: 0 10px 24px rgba(20,34,51,.07);\n          }\n\n          .loja-identidade__logo {\n            width: 58px;\n            height: 58px;\n            display: grid;\n            place-items: center;\n            overflow: hidden;\n            border: 1px solid #e5eaf0;\n            border-radius: 16px;\n            background: #0b1420;\n          }\n\n          .loja-identidade__logo img {\n            width: 100%;\n            height: 100%;\n            object-fit: cover;\n          }\n\n          .loja-identidade__texto {\n            min-width: 0;\n          }\n\n          .loja-identidade__texto > span {\n            display: block;\n            margin-bottom: 3px;\n            color: #8b98a9;\n            font-size: .58rem;\n            font-weight: 900;\n            letter-spacing: .10em;\n            text-transform: uppercase;\n          }\n\n          .loja-identidade__texto h1 {\n            margin: 0 0 7px;\n            overflow: hidden;\n            color: #152033;\n            font-size: 1.08rem;\n            line-height: 1.1;\n            text-overflow: ellipsis;\n            white-space: nowrap;\n          }\n\n          .loja-identidade__meta {\n            display: flex;\n            align-items: center;\n            gap: 7px;\n            flex-wrap: wrap;\n          }\n\n          .loja-identidade__meta span {\n            min-height: 25px;\n            display: inline-flex;\n            align-items: center;\n            gap: 5px;\n            padding: 0 8px;\n            border-radius: 999px;\n            background: #f3f6f9;\n            color: #6a788b;\n            font-size: .65rem;\n            font-weight: 800;\n          }\n\n          .loja-identidade__meta span.aberto {\n            background: #eefbf3;\n            color: #15803d;\n          }\n\n          .loja-identidade__meta span.fechado {\n            background: #fff0f1;\n            color: #c24145;\n          }\n\n          .loja-identidade__meta i {\n            width: 7px;\n            height: 7px;\n            border-radius: 50%;\n            background: currentColor;\n          }\n\n          .categorias-clean {\n            gap: 8px !important;\n          }\n\n          .categorias-clean button {\n            min-height: 38px !important;\n            padding: 0 15px !important;\n            border: 1px solid #dce4ee !important;\n            border-radius: 999px !important;\n            background: rgba(255,255,255,.97) !important;\n            color: #1b2638 !important;\n            box-shadow: 0 4px 12px rgba(20,34,51,.05) !important;\n          }\n\n          .categorias-clean button::before,\n          .categorias-clean button::after {\n            display: none !important;\n          }\n\n          .categorias-clean button.ativo {\n            border-color: color-mix(in srgb, var(--cor-loja) 44%, #dce4ee) !important;\n            background: color-mix(in srgb, var(--cor-loja) 9%, #fff) !important;\n            color: var(--cor-loja) !important;\n            box-shadow: 0 6px 14px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;\n          }\n\n\n          @property --led-angle {\n            syntax: '<angle>';\n            initial-value: 0deg;\n            inherits: false;\n          }\n\n          .vitrine-destaques {\n            position: relative;\n            margin: 12px 0 26px;\n            padding: 15px 14px 14px;\n            border: 1px solid rgba(225,231,239,.95);\n            border-radius: 22px;\n            background:\n              radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--cor-loja) 9%, transparent), transparent 38%),\n              linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,253,.96));\n            box-shadow: 0 12px 30px rgba(20,34,51,.07);\n            overflow: hidden;\n          }\n\n          .vitrine-destaques::after {\n            content: '';\n            position: absolute;\n            inset: 0;\n            pointer-events: none;\n            border-radius: inherit;\n            box-shadow: inset 0 1px 0 rgba(255,255,255,.8);\n          }\n\n          .vitrine-destaques__topo {\n            position: relative;\n            z-index: 2;\n            display: flex;\n            align-items: flex-end;\n            justify-content: space-between;\n            gap: 12px;\n            margin-bottom: 13px;\n          }\n\n          .vitrine-destaques__selo {\n            display: inline-flex;\n            align-items: center;\n            gap: 6px;\n            min-height: 27px;\n            padding: 0 10px;\n            border: 1px solid color-mix(in srgb, var(--cor-loja) 20%, #dfe6ef);\n            border-radius: 999px;\n            background: color-mix(in srgb, var(--cor-loja) 8%, #fff);\n            color: var(--cor-loja);\n            font-size: .68rem;\n            font-weight: 900;\n            letter-spacing: .02em;\n          }\n\n          .vitrine-destaques h2 {\n            margin: 7px 0 3px;\n            color: #111827;\n            font-size: 1.22rem;\n            line-height: 1.15;\n            letter-spacing: -.02em;\n          }\n\n          .vitrine-destaques p {\n            margin: 0;\n            color: #7d899b;\n            font-size: .79rem;\n          }\n\n          .vitrine-destaques__lista {\n            position: relative;\n            z-index: 2;\n            display: grid;\n            grid-auto-flow: column;\n            grid-auto-columns: minmax(220px, 260px);\n            gap: 13px;\n            overflow-x: auto;\n            padding: 2px 2px 9px;\n            scroll-snap-type: x proximity;\n            scrollbar-width: none;\n          }\n\n          .vitrine-destaques__lista::-webkit-scrollbar {\n            display: none;\n          }\n\n          .vitrine-destaques__card {\n            --led-angle: 0deg;\n            position: relative;\n            isolation: isolate;\n            overflow: hidden;\n            display: grid;\n            grid-template-rows: 134px auto;\n            min-width: 0;\n            padding: 2px;\n            border: 0;\n            border-radius: 20px;\n            background:\n              conic-gradient(\n                from var(--led-angle),\n                transparent 0deg 250deg,\n                color-mix(in srgb, var(--cor-loja) 80%, #7c3aed) 280deg,\n                #8fb8ff 305deg,\n                transparent 335deg 360deg\n              );\n            box-shadow:\n              0 12px 28px rgba(20,34,51,.09),\n              0 0 0 1px rgba(215,224,235,.65);\n            text-align: left;\n            scroll-snap-align: start;\n            cursor: pointer;\n            animation: ledCardRound 4.2s linear infinite;\n          }\n\n          .vitrine-destaques__card::before {\n            content: '';\n            position: absolute;\n            z-index: -1;\n            inset: 2px;\n            border-radius: 18px;\n            background: #fff;\n          }\n\n          .vitrine-destaques__card::after {\n            content: '';\n            position: absolute;\n            z-index: 3;\n            inset: 0;\n            pointer-events: none;\n            border-radius: inherit;\n            box-shadow:\n              inset 0 0 0 1px rgba(255,255,255,.5),\n              0 0 18px color-mix(in srgb, var(--cor-loja) 10%, transparent);\n          }\n\n          @keyframes ledCardRound {\n            to { --led-angle: 360deg; }\n          }\n\n          .vitrine-destaques__imagem {\n            position: relative;\n            overflow: hidden;\n            display: grid;\n            place-items: center;\n            margin: 2px 2px 0;\n            border-radius: 16px 16px 10px 10px;\n            background: #f4f6f9;\n          }\n\n          .vitrine-destaques__imagem img {\n            width: 100%;\n            height: 100%;\n            object-fit: cover;\n            transition: transform .28s ease;\n          }\n\n          .vitrine-destaques__card:active .vitrine-destaques__imagem img {\n            transform: scale(1.025);\n          }\n\n          .vitrine-destaques__badge {\n            position: absolute;\n            top: 10px;\n            left: 10px;\n            min-height: 25px;\n            display: inline-flex;\n            align-items: center;\n            padding: 0 9px;\n            border: 1px solid rgba(255,255,255,.45);\n            border-radius: 999px;\n            background: rgba(19,31,49,.88);\n            color: #fff;\n            font-size: .6rem;\n            font-weight: 950;\n            letter-spacing: .07em;\n            box-shadow: 0 7px 18px rgba(10,19,31,.18);\n            backdrop-filter: blur(8px);\n          }\n\n          .vitrine-destaques__conteudo {\n            position: relative;\n            z-index: 1;\n            display: grid;\n            gap: 5px;\n            margin: 0 2px 2px;\n            padding: 12px 13px 13px;\n            border-radius: 10px 10px 16px 16px;\n            background: #fff;\n          }\n\n          .vitrine-destaques__conteudo > strong {\n            overflow: hidden;\n            color: #131d2e;\n            font-size: .94rem;\n            text-overflow: ellipsis;\n            white-space: nowrap;\n          }\n\n          .vitrine-destaques__conteudo > small {\n            min-height: 34px;\n            display: -webkit-box;\n            overflow: hidden;\n            color: #7c8ba0;\n            font-size: .72rem;\n            line-height: 1.35;\n            -webkit-line-clamp: 2;\n            -webkit-box-orient: vertical;\n          }\n\n          .vitrine-destaques__precos {\n            display: flex;\n            align-items: baseline;\n            gap: 8px;\n            margin-top: 4px;\n          }\n\n          .vitrine-destaques__precos del {\n            color: #9aa6b7;\n            font-size: .69rem;\n          }\n\n          .vitrine-destaques__precos b {\n            color: var(--cor-loja);\n            font-size: .96rem;\n            font-weight: 900;\n          }\n\n          .loja-mobile-nav.oculto-modal {\n            display: none !important;\n          }\n\n          .categorias-filtro button {\n            flex: 0 0 auto;\n            min-height: 40px;\n            padding: 0 16px;\n            border: 1px solid #dbe3ee;\n            border-radius: 999px;\n            background: #fff;\n            color: #192235;\n            font: inherit;\n            font-size: .88rem;\n            font-weight: 800;\n            cursor: pointer;\n            transition: .18s ease;\n          }\n\n          .categorias-filtro button.ativo {\n            border-color: var(--cor-loja);\n            background: var(--cor-loja);\n            color: #fff;\n            box-shadow: 0 7px 18px color-mix(in srgb, var(--cor-loja) 24%, transparent);\n          }\n\n\n          .categorias-led {\n            gap: 10px;\n          }\n\n          .categorias-led button {\n            position: relative;\n            isolation: isolate;\n            display: inline-flex;\n            align-items: center;\n            gap: 8px;\n            overflow: hidden;\n          }\n\n          .categorias-led button::before {\n            content: '';\n            position: absolute;\n            z-index: -2;\n            inset: -1px;\n            border-radius: inherit;\n            background:\n              linear-gradient(\n                110deg,\n                transparent 0 22%,\n                color-mix(in srgb, var(--cor-loja) 55%, #7c3aed) 32%,\n                transparent 42% 100%\n              );\n            background-size: 220% 100%;\n            background-position: 140% 0;\n            opacity: 0;\n            transition: opacity .18s ease;\n          }\n\n          .categorias-led button::after {\n            content: '';\n            position: absolute;\n            z-index: -1;\n            inset: 1px;\n            border-radius: inherit;\n            background: rgba(255,255,255,.98);\n          }\n\n          .categorias-led button.ativo::before {\n            opacity: 1;\n            animation: categoriaLedMove 3.2s linear infinite;\n          }\n\n          .categorias-led button.ativo::after {\n            background:\n              linear-gradient(\n                135deg,\n                color-mix(in srgb, var(--cor-loja) 88%, #2f2bff),\n                color-mix(in srgb, var(--cor-loja) 70%, #7c3aed)\n              );\n          }\n\n          .categorias-led button.ativo {\n            border-color: transparent !important;\n            background: transparent !important;\n            color: #fff !important;\n            box-shadow:\n              0 8px 18px color-mix(in srgb, var(--cor-loja) 22%, transparent),\n              0 0 0 1px color-mix(in srgb, var(--cor-loja) 14%, transparent) !important;\n          }\n\n          .categoria-led__icone {\n            width: 25px;\n            height: 25px;\n            display: grid;\n            place-items: center;\n            flex: 0 0 25px;\n            border-radius: 9px;\n            background: #f4f7fb;\n            color: #50637b;\n          }\n\n          .categorias-led button.ativo .categoria-led__icone {\n            background: rgba(255,255,255,.14);\n            color: #fff;\n            box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);\n          }\n\n          .categoria-led__letra {\n            font-size: .72rem;\n            line-height: 1;\n            font-weight: 950;\n            letter-spacing: .01em;\n          }\n\n          @keyframes categoriaLedMove {\n            from { background-position: 140% 0; }\n            to { background-position: -120% 0; }\n          }\n\n          @media (prefers-reduced-motion: reduce) {\n            .categorias-led button.ativo::before {\n              animation: none !important;\n            }\n          }\n\n          @media (max-width: 600px) {\n            .conteudo {\n              padding-top: 0 !important;\n            }\n\n            .hero {\n              min-height: 215px !important;\n              max-height: 215px !important;\n              margin-bottom: 42px !important;\n            }\n\n            .hero-store-card {\n              right: 10px !important;\n              bottom: -36px !important;\n              left: 10px !important;\n              min-height: 74px !important;\n              padding: 10px 12px !important;\n              border-radius: 17px !important;\n            }\n\n            .hero-store-card__logo {\n              width: 50px !important;\n              height: 50px !important;\n              flex-basis: 50px !important;\n            }\n\n            .hero-store-card__texto h1 {\n              font-size: 1rem !important;\n            }\n\n            .hero-clean__status,\n            .hero-clean__tempo {\n              min-height: 25px !important;\n              padding: 0 8px !important;\n              font-size: .65rem !important;\n            }\n\n            .modal-produto .modal-produto__midia {\n              max-height: 260px !important;\n            }\n\n            .modal-produto .modal-produto__midia img {\n              object-fit: contain !important;\n              background: #fff !important;\n            }\n\n            .modal-produto {\n              max-height: 92dvh !important;\n              display: flex !important;\n              flex-direction: column !important;\n              overflow: hidden !important;\n              padding-bottom: 0 !important;\n            }\n\n            .modal-produto__midia {\n              flex: 0 0 auto !important;\n            }\n\n            .modal-produto__conteudo {\n              flex: 1 1 auto !important;\n              min-height: 0 !important;\n              overflow-y: auto !important;\n              padding-bottom: 0 !important;\n              overscroll-behavior: contain;\n            }\n\n            .modal-produto__rodape {\n              position: sticky !important;\n              z-index: 30 !important;\n              bottom: 0 !important;\n              display: grid !important;\n              grid-template-columns: 108px minmax(0, 1fr) !important;\n              gap: 8px !important;\n              margin: 18px -16px 0 !important;\n              padding: 10px 12px calc(10px + env(safe-area-inset-bottom)) !important;\n              border-top: 1px solid #e7ebf2 !important;\n              background: rgba(255,255,255,.99) !important;\n              box-shadow: 0 -8px 22px rgba(20,34,51,.08) !important;\n              backdrop-filter: blur(12px);\n            }\n\n            .adicionar-produto {\n              min-height: 52px !important;\n              border-radius: 14px !important;\n            }\n\n            .quantidade-produto {\n              min-height: 52px !important;\n              border-radius: 14px !important;\n            }\n\n            .busca {\n              position: relative;\n              z-index: 5;\n              margin-top: 0 !important;\n              margin-bottom: 12px !important;\n              min-height: 52px !important;\n              border: 1px solid rgba(205,214,226,.82) !important;\n              border-radius: 16px !important;\n              background: rgba(255,255,255,.96) !important;\n              box-shadow: 0 10px 30px rgba(24,35,52,.12) !important;\n              backdrop-filter: blur(12px);\n            }\n\n            .busca input {\n              font-size: .93rem !important;\n            }\n\n            .categorias-filtro {\n              margin: 0 -6px 24px !important;\n              padding: 4px 6px 8px !important;\n              gap: 8px !important;\n              overflow-x: auto;\n              scroll-snap-type: x proximity;\n            }\n\n            .categorias-filtro button {\n              min-height: 46px;\n              padding: 0 13px 0 10px;\n              border-color: #d7dfeb !important;\n              background: rgba(255,255,255,.94) !important;\n              color: #182235 !important;\n              font-size: .8rem;\n              font-weight: 850;\n              box-shadow: 0 5px 14px rgba(17,31,48,.06);\n              scroll-snap-align: start;\n            }\n\n            .categorias-filtro button.ativo {\n              border-color: var(--cor-loja) !important;\n              background: linear-gradient(135deg, var(--cor-loja), color-mix(in srgb, var(--cor-loja) 78%, #7b3cff)) !important;\n              color: #fff !important;\n              box-shadow: 0 8px 18px color-mix(in srgb, var(--cor-loja) 24%, transparent) !important;\n              transform: translateY(-1px);\n            }\n\n            .secao {\n              margin-top: 0 !important;\n              padding-top: 0 !important;\n            }\n\n            .secao__titulo {\n              margin-bottom: 14px !important;\n              padding: 0 2px !important;\n              align-items: flex-end !important;\n            }\n\n            .secao__titulo h2 {\n              margin: 0 !important;\n              color: #121a2a !important;\n              font-size: 1.28rem !important;\n              line-height: 1.1 !important;\n            }\n\n            .secao__titulo p {\n              margin-top: 5px !important;\n              color: #7b8aa2 !important;\n              font-size: .82rem !important;\n            }\n\n            .secao__titulo > span {\n              display: none !important;\n            }\n\n            .produtos {\n              display: grid !important;\n              gap: 12px !important;\n            }\n\n            .produto {\n              min-height: 126px !important;\n              grid-template-columns: minmax(0,1fr) 104px !important;\n              gap: 12px !important;\n              padding: 14px !important;\n              border: 1px solid #e1e7ef !important;\n              border-radius: 20px !important;\n              background:\n                linear-gradient(145deg, rgba(255,255,255,.99), rgba(248,250,253,.98)) !important;\n              box-shadow:\n                0 8px 20px rgba(20,34,51,.07),\n                inset 0 1px 0 rgba(255,255,255,.9) !important;\n              overflow: hidden;\n            }\n\n            .produto:active {\n              transform: scale(.992);\n            }\n\n            .produto__texto {\n              align-self: stretch !important;\n              display: flex !important;\n              flex-direction: column !important;\n              min-width: 0;\n            }\n\n            .produto__texto .destaque {\n              width: max-content;\n              margin-bottom: 7px !important;\n              padding: 4px 8px !important;\n              border-radius: 999px !important;\n              background: color-mix(in srgb, var(--cor-loja) 10%, #fff) !important;\n              color: var(--cor-loja) !important;\n              font-size: .62rem !important;\n              letter-spacing: .05em;\n            }\n\n            .produto__texto h3 {\n              margin: 0 0 5px !important;\n              color: #111a2a !important;\n              font-size: .98rem !important;\n              line-height: 1.15 !important;\n            }\n\n            .produto__texto p {\n              display: -webkit-box !important;\n              margin: 0 0 8px !important;\n              overflow: hidden !important;\n              color: #7d8ba1 !important;\n              font-size: .78rem !important;\n              line-height: 1.35 !important;\n              -webkit-box-orient: vertical;\n              -webkit-line-clamp: 2;\n            }\n\n            .produto__texto b {\n              margin-top: auto !important;\n              color: #111a2a !important;\n              font-size: .92rem !important;\n            }\n\n            .produto__imagem {\n              width: 104px !important;\n              height: 98px !important;\n              align-self: center !important;\n              border: 1px solid #eef1f5 !important;\n              border-radius: 16px !important;\n              background: #f8fafc !important;\n              box-shadow: inset 0 1px 0 rgba(255,255,255,.8);\n              overflow: hidden;\n            }\n\n            .produto__imagem img {\n              width: 100% !important;\n              height: 100% !important;\n              object-fit: cover !important;\n            }\n\n            .produto__seta {\n              right: 8px !important;\n              bottom: 8px !important;\n              width: 17px !important;\n              color: #9ba9ba !important;\n            }\n\n            .barra-carrinho {\n              right: 12px !important;\n              bottom: 12px !important;\n              left: 12px !important;\n              width: auto !important;\n              min-height: 58px !important;\n              border-radius: 18px !important;\n              box-shadow: 0 16px 35px color-mix(in srgb, var(--cor-loja) 28%, rgba(0,0,0,.22)) !important;\n            }\n\n            .barra-carrinho .bolha {\n              width: 34px !important;\n              height: 34px !important;\n              border-radius: 10px !important;\n              background: rgba(255,255,255,.16) !important;\n            }\n\n\n            .conteudo {\n              padding-bottom: 98px !important;\n            }\n\n\n            .vitrine-destaques {\n              margin: 0 -2px 24px !important;\n              padding: 14px 10px 12px !important;\n              border-radius: 20px !important;\n            }\n\n            .vitrine-destaques__topo {\n              margin-bottom: 11px !important;\n            }\n\n            .vitrine-destaques h2 {\n              font-size: 1.17rem !important;\n            }\n\n            .vitrine-destaques__lista {\n              grid-auto-columns: minmax(205px, 74vw) !important;\n              margin-right: -12px;\n              padding-right: 12px;\n            }\n\n            .vitrine-destaques__card {\n              grid-template-rows: 128px auto !important;\n              border-radius: 18px !important;\n            }\n\n            .secao + .secao {\n              margin-top: 22px !important;\n            }\n\n            .secao {\n              position: relative;\n              margin-right: -10px !important;\n              margin-left: -10px !important;\n              padding: 16px 10px 18px !important;\n              border-top: 1px solid #e4eaf1 !important;\n              border-bottom: 1px solid #e4eaf1 !important;\n              background:\n                linear-gradient(180deg, rgba(244,247,251,.98), rgba(239,244,249,.92)) !important;\n            }\n\n            .secao:first-of-type {\n              border-top: 0 !important;\n              border-radius: 18px 18px 0 0;\n            }\n\n            .secao__titulo {\n              position: relative;\n              margin-bottom: 13px !important;\n              padding: 0 2px 0 10px !important;\n            }\n\n            .secao__titulo::before {\n              content: '';\n              position: absolute;\n              top: 1px;\n              bottom: 1px;\n              left: 0;\n              width: 4px;\n              border-radius: 999px;\n              background: var(--cor-loja);\n            }\n\n            .secao__titulo h2 {\n              font-size: 1.18rem !important;\n              letter-spacing: -.02em;\n            }\n\n            .secao__titulo p {\n              margin-top: 4px !important;\n            }\n\n            .produto {\n              border: 1px solid rgba(217,225,235,.96) !important;\n              border-radius: 18px !important;\n              background: rgba(255,255,255,.98) !important;\n              box-shadow: 0 7px 18px rgba(20,34,51,.065) !important;\n            }\n\n            .produto__imagem {\n              border-radius: 17px !important;\n            }\n\n            .loja-mobile-nav {\n              position: fixed;\n              z-index: 90;\n              right: 8px;\n              bottom: 8px;\n              left: 8px;\n              display: grid;\n              grid-template-columns: repeat(4, 1fr);\n              min-height: 66px;\n              padding: 6px 5px max(6px, env(safe-area-inset-bottom));\n              border: 1px solid rgba(216,224,234,.96);\n              border-radius: 21px;\n              background: rgba(255,255,255,.97);\n              box-shadow: 0 16px 42px rgba(20,34,51,.20);\n              backdrop-filter: blur(16px);\n            }\n\n            .loja-mobile-nav button {\n              position: relative;\n              display: flex;\n              flex-direction: column;\n              align-items: center;\n              justify-content: center;\n              gap: 4px;\n              min-width: 0;\n              border: 0;\n              border-radius: 15px;\n              background: transparent;\n              color: #7a8798;\n              font: inherit;\n            }\n\n            .loja-mobile-nav button span {\n              font-size: .66rem;\n              font-weight: 800;\n            }\n\n            .loja-mobile-nav button.ativo,\n            .loja-mobile-nav button.tem-itens {\n              color: var(--cor-loja);\n            }\n\n            .loja-mobile-nav button.ativo {\n              background: color-mix(in srgb, var(--cor-loja) 9%, #fff);\n            }\n\n            .loja-mobile-nav button b {\n              position: absolute;\n              top: 3px;\n              left: calc(50% + 7px);\n              display: grid;\n              place-items: center;\n              min-width: 18px;\n              height: 18px;\n              padding: 0 4px;\n              border: 2px solid #fff;\n              border-radius: 999px;\n              background: var(--cor-loja);\n              color: #fff;\n              font-size: .58rem;\n            }\n\n            .barra-carrinho {\n              display: none !important;\n            }\n          }\n\n          @media (prefers-reduced-motion: reduce) {\n            .vitrine-destaques__card {\n              animation: none !important;\n            }\n          }\n\n          .vitrine-destaques {\n            margin: 8px 0 26px !important;\n            padding: 0 !important;\n            border: 0 !important;\n            border-radius: 0 !important;\n            background: transparent !important;\n            box-shadow: none !important;\n            overflow: visible !important;\n          }\n\n          .vitrine-destaques::after {\n            display: none !important;\n          }\n\n          .vitrine-destaques__topo {\n            margin-bottom: 12px !important;\n            padding: 0 2px !important;\n          }\n\n          .vitrine-destaques__selo {\n            min-height: 24px !important;\n            padding: 0 9px !important;\n            border: 1px solid #e0e7f1 !important;\n            background: #f5f7fb !important;\n            color: #52647d !important;\n            box-shadow: none !important;\n          }\n\n          .vitrine-destaques h2 {\n            margin-top: 6px !important;\n            font-size: 1.17rem !important;\n          }\n\n          .vitrine-destaques p {\n            max-width: 320px;\n            font-size: .76rem !important;\n          }\n\n          .vitrine-destaques__lista {\n            grid-auto-columns: minmax(270px, 82vw) !important;\n            gap: 12px !important;\n            padding: 0 10px 8px 2px !important;\n          }\n\n          .vitrine-destaques__card {\n            grid-template-rows: 150px auto !important;\n            padding: 0 !important;\n            border: 1px solid #e1e7ef !important;\n            border-radius: 22px !important;\n            background: #fff !important;\n            box-shadow: 0 12px 26px rgba(20,34,51,.08) !important;\n            animation: none !important;\n          }\n\n          .vitrine-destaques__card::before,\n          .vitrine-destaques__card::after {\n            display: none !important;\n          }\n\n          .vitrine-destaques__imagem {\n            margin: 0 !important;\n            border-radius: 21px 21px 0 0 !important;\n          }\n\n          .vitrine-destaques__imagem::after {\n            content: '';\n            position: absolute;\n            inset: auto 0 0 0;\n            height: 42%;\n            pointer-events: none;\n            background: linear-gradient(180deg, transparent, rgba(9,16,27,.30));\n          }\n\n          .vitrine-destaques__badge {\n            top: 11px !important;\n            left: 11px !important;\n            min-height: 24px !important;\n            padding: 0 9px !important;\n            border: 0 !important;\n            background: rgba(10,18,29,.78) !important;\n            font-size: .58rem !important;\n            backdrop-filter: blur(10px);\n          }\n\n          .vitrine-destaques__conteudo {\n            margin: 0 !important;\n            padding: 12px 14px 14px !important;\n            border-radius: 0 0 21px 21px !important;\n          }\n\n          .vitrine-destaques__conteudo > strong {\n            font-size: .98rem !important;\n          }\n\n          .vitrine-destaques__conteudo > small {\n            min-height: 30px !important;\n            font-size: .71rem !important;\n          }\n\n          .vitrine-destaques__precos {\n            justify-content: space-between;\n            align-items: center;\n            margin-top: 4px !important;\n          }\n\n          .vitrine-destaques__precos b {\n            font-size: 1rem !important;\n          }\n\n          .vitrine-destaques__precos::after {\n            content: '+';\n            width: 30px;\n            height: 30px;\n            display: grid;\n            place-items: center;\n            border-radius: 10px;\n            background: color-mix(in srgb, var(--cor-loja) 10%, #fff);\n            color: var(--cor-loja);\n            font-size: 1.1rem;\n            font-weight: 900;\n          }\n\n          .categorias-clean {\n            position: relative;\n            padding-bottom: 8px !important;\n          }\n\n          .categorias-clean::after {\n            content: '';\n            position: absolute;\n            right: 0;\n            bottom: 0;\n            left: 0;\n            height: 1px;\n            background: linear-gradient(90deg, transparent, #e7edf4 15%, #e7edf4 85%, transparent);\n          }\n\n          @media (max-width: 600px) {\n            .hero {\n              min-height: 215px !important;\n              max-height: 215px !important;\n              margin-bottom: 0 !important;\n            }\n\n            .hero-signature {\n              right: 12px !important;\n              bottom: 12px !important;\n              left: 12px !important;\n              grid-template-columns: 48px minmax(0,1fr) !important;\n              padding: 9px 10px !important;\n              border-radius: 16px !important;\n            }\n\n            .hero-signature__logo {\n              width: 48px !important;\n              height: 48px !important;\n            }\n\n            .hero-signature__texto h1 {\n              font-size: 1rem !important;\n            }\n\n            .hero-signature__meta {\n              font-size: .62rem !important;\n            }\n\n            .loja-identidade {\n              grid-template-columns: 52px minmax(0,1fr) !important;\n              margin: 10px 0 10px !important;\n              padding: 10px 11px !important;\n              border-radius: 16px !important;\n            }\n\n            .loja-identidade__logo {\n              width: 52px !important;\n              height: 52px !important;\n            }\n\n            .loja-identidade__texto h1 {\n              font-size: 1rem !important;\n            }\n\n            .busca {\n              margin-top: 0 !important;\n              margin-bottom: 12px !important;\n              border-radius: 15px !important;\n            }\n\n            .categorias-filtro {\n              margin-bottom: 22px !important;\n            }\n\n            .vitrine-destaques {\n              margin-top: 0 !important;\n            }\n          }\n\n          /* LED dos cards de destaque: mantém o layout atual e restaura a luz correndo na borda */\n          .vitrine-destaques__card {\n            --led-angle: 0deg;\n            padding: 2px !important;\n            border: 0 !important;\n            background:\n              conic-gradient(\n                from var(--led-angle),\n                transparent 0deg 238deg,\n                color-mix(in srgb, var(--cor-loja) 88%, #5b5cff) 270deg,\n                #a8c7ff 296deg,\n                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 314deg,\n                transparent 342deg 360deg\n              ) !important;\n            box-shadow:\n              0 12px 26px rgba(20,34,51,.08),\n              0 0 15px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;\n            animation: ledCardRound 3.8s linear infinite !important;\n          }\n\n          .vitrine-destaques__imagem {\n            margin: 0 !important;\n            border-radius: 20px 20px 0 0 !important;\n          }\n\n          .vitrine-destaques__conteudo {\n            margin: 0 !important;\n            border-radius: 0 0 20px 20px !important;\n            background: #fff !important;\n          }\n\n          @media (prefers-reduced-motion: reduce) {\n            .vitrine-destaques__card {\n              animation: none !important;\n            }\n          }\n\n\n          /* RESTAURA APENAS O LED DAS CATEGORIAS */\n          .categorias-clean button {\n            position: relative !important;\n            isolation: isolate !important;\n            overflow: hidden !important;\n            border: 1px solid #dce4ee !important;\n            background: rgba(255,255,255,.97) !important;\n            color: #1b2638 !important;\n          }\n\n          .categorias-clean button::before {\n            content: '' !important;\n            display: block !important;\n            position: absolute !important;\n            z-index: -2 !important;\n            inset: -1px !important;\n            border-radius: inherit !important;\n            background:\n              conic-gradient(\n                from var(--cat-led-angle, 0deg),\n                transparent 0deg 245deg,\n                color-mix(in srgb, var(--cor-loja) 90%, #536dff) 272deg,\n                #a9c7ff 298deg,\n                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 318deg,\n                transparent 345deg 360deg\n              ) !important;\n            opacity: 0 !important;\n          }\n\n          .categorias-clean button::after {\n            content: '' !important;\n            display: block !important;\n            position: absolute !important;\n            z-index: -1 !important;\n            inset: 2px !important;\n            border-radius: calc(999px - 2px) !important;\n            background: rgba(255,255,255,.98) !important;\n          }\n\n          .categorias-clean button.ativo {\n            border-color: transparent !important;\n            background: transparent !important;\n            color: var(--cor-loja) !important;\n            box-shadow:\n              0 6px 14px color-mix(in srgb, var(--cor-loja) 12%, transparent),\n              0 0 12px color-mix(in srgb, var(--cor-loja) 8%, transparent) !important;\n          }\n\n          .categorias-clean button.ativo::before {\n            opacity: 1 !important;\n            animation: categoriaLedVolta 3.2s linear infinite !important;\n          }\n\n          .categorias-clean button.ativo::after {\n            background: color-mix(in srgb, var(--cor-loja) 7%, #fff) !important;\n          }\n\n          @keyframes categoriaLedVolta {\n            from { --cat-led-angle: 0deg; }\n            to { --cat-led-angle: 360deg; }\n          }\n\n          @media (prefers-reduced-motion: reduce) {\n            .categorias-clean button.ativo::before {\n              animation: none !important;\n            }\n          }\n\n\n          /* CARD DE VIDRO DA LOJA: sobrepõe levemente o GIF sem esconder o fundo */\n          .loja-identidade {\n            position: relative !important;\n            z-index: 12 !important;\n            grid-template-columns: 58px minmax(0, 1fr) !important;\n            gap: 12px !important;\n            margin: -44px 10px 14px !important;\n            padding: 12px 14px !important;\n            border: 1px solid rgba(255,255,255,.28) !important;\n            border-radius: 20px !important;\n            background:\n              linear-gradient(\n                135deg,\n                rgba(31, 22, 22, .54),\n                rgba(43, 31, 30, .38)\n              ) !important;\n            box-shadow:\n              0 14px 34px rgba(20, 12, 12, .22),\n              inset 0 1px 0 rgba(255,255,255,.18) !important;\n            backdrop-filter: blur(13px) saturate(125%) !important;\n            -webkit-backdrop-filter: blur(13px) saturate(125%) !important;\n            overflow: hidden !important;\n          }\n\n          .loja-identidade::before {\n            content: '' !important;\n            position: absolute !important;\n            inset: 0 !important;\n            pointer-events: none !important;\n            border-radius: inherit !important;\n            background:\n              radial-gradient(circle at 18% 20%, rgba(255,255,255,.12), transparent 34%),\n              linear-gradient(115deg, rgba(255,255,255,.07), transparent 42%) !important;\n          }\n\n          .loja-identidade__logo,\n          .loja-identidade__texto {\n            position: relative !important;\n            z-index: 2 !important;\n          }\n\n          .loja-identidade__logo {\n            width: 58px !important;\n            height: 58px !important;\n            border: 1px solid rgba(255,255,255,.32) !important;\n            border-radius: 16px !important;\n            background: rgba(8,12,18,.62) !important;\n            box-shadow:\n              0 8px 18px rgba(0,0,0,.18),\n              0 0 0 3px rgba(255,255,255,.04) !important;\n          }\n\n          .loja-identidade__texto > span {\n            color: rgba(255,255,255,.66) !important;\n          }\n\n          .loja-identidade__texto h1 {\n            color: #fff !important;\n            text-shadow: 0 2px 10px rgba(0,0,0,.28) !important;\n          }\n\n          .loja-identidade__meta span {\n            border: 1px solid rgba(255,255,255,.14) !important;\n            background: rgba(255,255,255,.10) !important;\n            color: rgba(255,255,255,.88) !important;\n            backdrop-filter: blur(8px) !important;\n          }\n\n          .loja-identidade__meta span.aberto {\n            border-color: rgba(59, 220, 128, .20) !important;\n            background: rgba(20, 120, 62, .34) !important;\n            color: #d8ffe7 !important;\n          }\n\n          .loja-identidade__meta span.fechado {\n            border-color: rgba(255, 107, 107, .22) !important;\n            background: rgba(140, 38, 45, .34) !important;\n            color: #ffe1e3 !important;\n          }\n\n          @media (max-width: 600px) {\n            .loja-identidade {\n              grid-template-columns: 52px minmax(0,1fr) !important;\n              margin: -42px 8px 13px !important;\n              padding: 10px 11px !important;\n              border-radius: 18px !important;\n            }\n\n            .loja-identidade__logo {\n              width: 52px !important;\n              height: 52px !important;\n            }\n\n            .loja-identidade__texto h1 {\n              font-size: 1rem !important;\n            }\n\n            .loja-identidade__texto > span {\n              font-size: .54rem !important;\n            }\n\n            .loja-identidade__meta span {\n              min-height: 24px !important;\n              padding: 0 7px !important;\n              font-size: .63rem !important;\n            }\n\n            .busca {\n              margin-top: 0 !important;\n            }\n          }\n\n\n          /* VIDRO DE PONTA A PONTA */\n          .loja-identidade {\n            width: 100% !important;\n            max-width: none !important;\n            box-sizing: border-box !important;\n            margin: -44px 0 14px !important;\n            border-left: 0 !important;\n            border-right: 0 !important;\n            border-radius: 18px 18px 0 0 !important;\n          }\n\n          @media (max-width: 600px) {\n            .loja-identidade {\n              width: 100% !important;\n              margin: -42px 0 13px !important;\n              padding-left: 14px !important;\n              padding-right: 14px !important;\n              border-radius: 18px 18px 0 0 !important;\n            }\n          }\n\n\n          /* FORÇA O VIDRO A ENCOSTAR NAS DUAS BORDAS DO CARDÁPIO */\n          .loja-identidade {\n            width: calc(100% + 24px) !important;\n            max-width: none !important;\n            margin-left: -12px !important;\n            margin-right: -12px !important;\n            box-sizing: border-box !important;\n            border-left: 0 !important;\n            border-right: 0 !important;\n            border-radius: 0 0 18px 18px !important;\n          }\n\n          @media (max-width: 600px) {\n            .loja-identidade {\n              width: calc(100% + 24px) !important;\n              margin-left: -12px !important;\n              margin-right: -12px !important;\n              padding-left: 16px !important;\n              padding-right: 16px !important;\n              border-radius: 0 0 18px 18px !important;\n            }\n          }\n\n\n          /* MODELOS VISUAIS PRONTOS KODVEXA FOOD */\n\n          .app.modelo-vitrine .conteudo {\n            background:\n              linear-gradient(180deg, #fffaf5 0%, #f6efe8 100%) !important;\n          }\n\n          .app.modelo-vitrine .produto,\n          .app.modelo-vitrine .vitrine-destaques__card {\n            border-color: #efd9c8 !important;\n            border-radius: 22px !important;\n            box-shadow: 0 10px 24px rgba(92,50,22,.08) !important;\n          }\n\n          .app.modelo-vitrine .secao {\n            background:\n              linear-gradient(180deg, rgba(255,250,245,.98), rgba(247,239,232,.94)) !important;\n            border-color: #eadbce !important;\n          }\n\n          .app.modelo-vitrine .secao__titulo::before {\n            background: #d9611c !important;\n          }\n\n          .app.modelo-vitrine .categorias-clean button.ativo,\n          .app.modelo-vitrine .categorias-filtro button.ativo {\n            color: #b94813 !important;\n            border-color: #f0b18d !important;\n            background: #fff0e5 !important;\n          }\n\n          .app.modelo-vitrine .vitrine-destaques__precos b {\n            color: #c64e16 !important;\n          }\n\n          .app.modelo-glass .conteudo {\n            background:\n              radial-gradient(circle at 50% 0%, rgba(88,129,190,.12), transparent 34%),\n              linear-gradient(180deg, #eef4fb, #e8eff7) !important;\n          }\n\n          .app.modelo-glass .busca,\n          .app.modelo-glass .produto,\n          .app.modelo-glass .vitrine-destaques__card,\n          .app.modelo-glass .loja-identidade {\n            border-color: rgba(139,162,190,.34) !important;\n            background: rgba(255,255,255,.74) !important;\n            box-shadow:\n              0 10px 28px rgba(36,57,82,.09),\n              inset 0 1px 0 rgba(255,255,255,.75) !important;\n            backdrop-filter: blur(14px) saturate(120%) !important;\n            -webkit-backdrop-filter: blur(14px) saturate(120%) !important;\n          }\n\n          .app.modelo-glass .secao {\n            background:\n              linear-gradient(180deg, rgba(240,246,252,.74), rgba(231,239,248,.70)) !important;\n            border-color: rgba(137,160,188,.26) !important;\n          }\n\n          .app.modelo-glass .categorias-clean button,\n          .app.modelo-glass .categorias-filtro button {\n            border-color: rgba(139,162,190,.34) !important;\n            background: rgba(255,255,255,.68) !important;\n            backdrop-filter: blur(10px) !important;\n          }\n\n          .app.modelo-glass .categorias-clean button.ativo,\n          .app.modelo-glass .categorias-filtro button.ativo {\n            border-color: color-mix(in srgb, var(--cor-loja) 40%, #9db0c6) !important;\n            background: color-mix(in srgb, var(--cor-loja) 8%, rgba(255,255,255,.72)) !important;\n          }\n\n\n          /* ===== MODELOS FOOD REAIS ===== */\n\n          .app.modelo-burger-house .conteudo {\n            background:\n              radial-gradient(circle at 50% 0%, rgba(255,99,26,.08), transparent 24%),\n              linear-gradient(180deg, #17110e 0%, #21150f 100%) !important;\n          }\n\n          .app.modelo-burger-house .busca,\n          .app.modelo-burger-house .produto,\n          .app.modelo-burger-house .vitrine-destaques__card,\n          .app.modelo-burger-house .secao {\n            border-color: rgba(255,129,55,.17) !important;\n            background: #251813 !important;\n            color: #fff !important;\n            box-shadow: 0 10px 26px rgba(0,0,0,.16) !important;\n          }\n\n          .app.modelo-burger-house .produto__texto h3,\n          .app.modelo-burger-house .produto__texto b,\n          .app.modelo-burger-house .secao__titulo h2,\n          .app.modelo-burger-house .vitrine-destaques h2,\n          .app.modelo-burger-house .vitrine-destaques__conteudo > strong {\n            color: #fff5ee !important;\n          }\n\n          .app.modelo-burger-house .produto__texto p,\n          .app.modelo-burger-house .secao__titulo p,\n          .app.modelo-burger-house .vitrine-destaques p,\n          .app.modelo-burger-house .vitrine-destaques__conteudo > small {\n            color: #b99f91 !important;\n          }\n\n          .app.modelo-burger-house .categorias-filtro button {\n            border-color: rgba(255,129,55,.22) !important;\n            background: #291a14 !important;\n            color: #e8d3c8 !important;\n          }\n\n          .app.modelo-burger-house .categorias-filtro button.ativo {\n            border-color: #ff6a1a !important;\n            background: #ff6a1a !important;\n            color: #fff !important;\n            box-shadow: 0 8px 18px rgba(255,106,26,.23) !important;\n          }\n\n          .app.modelo-burger-house .vitrine-destaques__precos b,\n          .app.modelo-burger-house .secao__titulo::before {\n            color: #ff7a2a !important;\n            background: #ff7a2a !important;\n          }\n\n          .app.modelo-gourmet .conteudo {\n            background:\n              linear-gradient(180deg, #fbf7f1 0%, #f3ece3 100%) !important;\n          }\n\n          .app.modelo-gourmet .produto,\n          .app.modelo-gourmet .vitrine-destaques__card {\n            border-color: #e8dccd !important;\n            border-radius: 16px !important;\n            background: #fffdf9 !important;\n            box-shadow: 0 9px 22px rgba(76,58,38,.07) !important;\n          }\n\n          .app.modelo-gourmet .secao {\n            border-color: #eadfd2 !important;\n            background: rgba(250,246,239,.90) !important;\n          }\n\n          .app.modelo-gourmet .secao__titulo::before {\n            background: #8c6c49 !important;\n          }\n\n          .app.modelo-gourmet .categorias-filtro button {\n            background: #fffdf9 !important;\n            border-color: #e6dacb !important;\n          }\n\n          .app.modelo-gourmet .categorias-filtro button.ativo {\n            background: #8c6c49 !important;\n            border-color: #8c6c49 !important;\n            color: #fff !important;\n          }\n\n          .app.modelo-gourmet .vitrine-destaques__precos b {\n            color: #7a5c3d !important;\n          }\n\n          .app.modelo-fast-food .conteudo {\n            background:\n              radial-gradient(circle at 12% 0%, rgba(255,96,40,.10), transparent 22%),\n              linear-gradient(180deg, #fffaf5 0%, #fff2e7 100%) !important;\n          }\n\n          .app.modelo-fast-food .produto,\n          .app.modelo-fast-food .vitrine-destaques__card {\n            border-color: #ffe0ce !important;\n            border-radius: 24px !important;\n            background: #fff !important;\n            box-shadow: 0 10px 24px rgba(255,91,38,.09) !important;\n          }\n\n          .app.modelo-fast-food .secao {\n            background: rgba(255,248,242,.95) !important;\n            border-color: #f8ddd0 !important;\n          }\n\n          .app.modelo-fast-food .secao__titulo::before {\n            background: #ff5426 !important;\n          }\n\n          .app.modelo-fast-food .categorias-filtro button.ativo {\n            background: linear-gradient(135deg, #ff4928, #ff8a1d) !important;\n            border-color: transparent !important;\n            color: #fff !important;\n            box-shadow: 0 8px 18px rgba(255,80,35,.20) !important;\n          }\n\n          .app.modelo-fast-food .vitrine-destaques__precos b {\n            color: #ef421e !important;\n          }\n\n          .app.modelo-night-food .conteudo {\n            background:\n              radial-gradient(circle at 50% 0%, rgba(68,93,172,.16), transparent 28%),\n              linear-gradient(180deg, #0b1220 0%, #111a2b 100%) !important;\n          }\n\n          .app.modelo-night-food .busca,\n          .app.modelo-night-food .produto,\n          .app.modelo-night-food .vitrine-destaques__card,\n          .app.modelo-night-food .loja-identidade {\n            border-color: rgba(123,145,211,.20) !important;\n            background: rgba(19,29,49,.76) !important;\n            box-shadow:\n              0 12px 28px rgba(0,0,0,.20),\n              inset 0 1px 0 rgba(255,255,255,.05) !important;\n            backdrop-filter: blur(14px) !important;\n          }\n\n          .app.modelo-night-food .produto__texto h3,\n          .app.modelo-night-food .produto__texto b,\n          .app.modelo-night-food .secao__titulo h2,\n          .app.modelo-night-food .vitrine-destaques h2,\n          .app.modelo-night-food .vitrine-destaques__conteudo > strong {\n            color: #f4f7ff !important;\n          }\n\n          .app.modelo-night-food .produto__texto p,\n          .app.modelo-night-food .secao__titulo p,\n          .app.modelo-night-food .vitrine-destaques p,\n          .app.modelo-night-food .vitrine-destaques__conteudo > small {\n            color: #91a0bd !important;\n          }\n\n          .app.modelo-night-food .secao {\n            border-color: rgba(122,145,211,.15) !important;\n            background: rgba(14,23,39,.72) !important;\n          }\n\n          .app.modelo-night-food .categorias-filtro button {\n            border-color: rgba(123,145,211,.20) !important;\n            background: rgba(255,255,255,.07) !important;\n            color: #cbd5ea !important;\n          }\n\n          .app.modelo-night-food .categorias-filtro button.ativo {\n            border-color: #6672ff !important;\n            background: #5966f2 !important;\n            color: #fff !important;\n            box-shadow: 0 0 18px rgba(89,102,242,.24) !important;\n          }\n\n          .app.modelo-clean-food .conteudo {\n            background: #f6f8fb !important;\n          }\n\n          .app.modelo-clean-food .produto,\n          .app.modelo-clean-food .vitrine-destaques__card {\n            border-color: #e5eaf0 !important;\n            border-radius: 18px !important;\n            background: #fff !important;\n            box-shadow: none !important;\n          }\n\n          .app.modelo-clean-food .secao {\n            background: #f6f8fb !important;\n            border-color: #e8edf2 !important;\n          }\n\n          .app.modelo-clean-food .secao__titulo::before {\n            background: #94a3b8 !important;\n          }\n\n          .app.modelo-clean-food .categorias-filtro button {\n            box-shadow: none !important;\n          }\n\n          .app.modelo-clean-food .categorias-filtro button.ativo {\n            background: #111827 !important;\n            border-color: #111827 !important;\n            color: #fff !important;\n            box-shadow: none !important;\n          }\n\n\n\n          /* Marmitaria & Frango: visual quente e claro para almoço */\n          .app.modelo-marmitaria .conteudo {\n            background:\n              linear-gradient(180deg, #fff9f2 0%, #f7eee5 100%) !important;\n          }\n\n          .app.modelo-marmitaria .produto,\n          .app.modelo-marmitaria .vitrine-destaques__card {\n            border-color: #ead8c7 !important;\n            background: #fffdf9 !important;\n            border-radius: 18px !important;\n            box-shadow: 0 7px 20px rgba(105,54,29,.07) !important;\n          }\n\n          .app.modelo-marmitaria .categoria-titulo::before {\n            background: #b94d25 !important;\n          }\n\n          .app.modelo-marmitaria .categorias button.ativo {\n            background: #b94d25 !important;\n            color: #fff !important;\n            border-color: #b94d25 !important;\n          }\n\n          .app.modelo-marmitaria .vitrine-destaques {\n            background: linear-gradient(145deg, #fff7ed, #fffdf9) !important;\n            border-color: #ead8c7 !important;\n          }\n\n          /* Padrão oficial KODVEXA: mantém o layout principal aprovado */\n          .app.modelo-kodvexa .conteudo {\n            background:\n              linear-gradient(180deg, #f3f6fa 0%, #edf2f7 100%) !important;\n          }\n\n          .app.modelo-kodvexa .produto,\n          .app.modelo-kodvexa .vitrine-destaques__card {\n            border-color: #e1e7ef !important;\n            background: #fff !important;\n          }\n\n\n          .loja-identidade__descricao {\n            margin: 0 0 7px !important;\n            display: -webkit-box;\n            overflow: hidden;\n            color: rgba(255,255,255,.72) !important;\n            font-size: .68rem !important;\n            line-height: 1.35 !important;\n            -webkit-line-clamp: 2;\n            -webkit-box-orient: vertical;\n          }\n\n          @media (max-width: 600px) {\n            .loja-identidade__descricao {\n              margin-bottom: 6px !important;\n              font-size: .64rem !important;\n              -webkit-line-clamp: 1;\n            }\n          }\n\n\n          /* Card da loja em vidro, deixando o GIF/capa aparecer por trás */\n          .loja-identidade {\n            background:\n              linear-gradient(135deg,\n                rgba(15, 18, 24, .58),\n                rgba(28, 30, 36, .36)\n              ) !important;\n            border: 1px solid rgba(255,255,255,.18) !important;\n            box-shadow:\n              0 12px 28px rgba(0,0,0,.18),\n              inset 0 1px 0 rgba(255,255,255,.12) !important;\n            backdrop-filter: blur(13px) saturate(135%) !important;\n            -webkit-backdrop-filter: blur(13px) saturate(135%) !important;\n          }\n\n          .loja-identidade::before {\n            content: \"\";\n            position: absolute;\n            inset: 0;\n            pointer-events: none;\n            border-radius: inherit;\n            background:\n              linear-gradient(180deg,\n                rgba(255,255,255,.10),\n                rgba(255,255,255,.015) 46%,\n                rgba(0,0,0,.06)\n              );\n          }\n\n          .loja-identidade > * {\n            position: relative;\n            z-index: 1;\n          }\n\n          .loja-identidade__texto > span,\n          .loja-identidade__texto h1,\n          .loja-identidade__descricao {\n            text-shadow: 0 1px 5px rgba(0,0,0,.45);\n          }\n\n\n          /* RESTAURA LED DOS CARDS DE DESTAQUE */\n          .vitrine-destaques__card {\n            --led-angle: 0deg !important;\n            position: relative !important;\n            isolation: isolate !important;\n            padding: 2px !important;\n            border: 0 !important;\n            background:\n              conic-gradient(\n                from var(--led-angle),\n                transparent 0deg 238deg,\n                color-mix(in srgb, var(--cor-loja) 88%, #5b5cff) 270deg,\n                #a8c7ff 296deg,\n                color-mix(in srgb, var(--cor-loja) 78%, #8b5cf6) 316deg,\n                transparent 344deg 360deg\n              ) !important;\n            box-shadow:\n              0 12px 26px rgba(20,34,51,.08),\n              0 0 16px color-mix(in srgb, var(--cor-loja) 11%, transparent) !important;\n            animation: ledCardRound 3.8s linear infinite !important;\n          }\n\n          .vitrine-destaques__card::before {\n            content: '' !important;\n            display: block !important;\n            position: absolute !important;\n            inset: 2px !important;\n            z-index: -1 !important;\n            border-radius: 20px !important;\n            background: #fff !important;\n          }\n\n          .vitrine-destaques__card::after {\n            content: '' !important;\n            display: block !important;\n            position: absolute !important;\n            inset: 0 !important;\n            pointer-events: none !important;\n            border-radius: inherit !important;\n            box-shadow:\n              inset 0 0 0 1px rgba(255,255,255,.45),\n              0 0 18px color-mix(in srgb, var(--cor-loja) 10%, transparent) !important;\n          }\n\n          .vitrine-destaques__imagem {\n            position: relative !important;\n            z-index: 1 !important;\n            margin: 0 !important;\n            border-radius: 20px 20px 0 0 !important;\n          }\n\n          .vitrine-destaques__conteudo {\n            position: relative !important;\n            z-index: 1 !important;\n            margin: 0 !important;\n            border-radius: 0 0 20px 20px !important;\n            background: #fff !important;\n          }\n\n          @keyframes ledCardRound {\n            to { --led-angle: 360deg; }\n          }\n\n          @media (prefers-reduced-motion: reduce) {\n            .vitrine-destaques__card {\n              animation: none !important;\n            }\n          }\n\n\n          /* LED ROBUSTO DOS DESTAQUES: gira a luz de verdade, sem depender de @property */\n          .vitrine-destaques__card {\n            position: relative !important;\n            isolation: isolate !important;\n            overflow: hidden !important;\n            padding: 2px !important;\n            border: 0 !important;\n            border-radius: 22px !important;\n            background: #ffffff !important;\n            box-shadow:\n              0 12px 26px rgba(20,34,51,.08),\n              0 0 18px color-mix(in srgb, var(--cor-loja) 14%, transparent) !important;\n            animation: none !important;\n          }\n\n          .vitrine-destaques__card::before {\n            content: \"\" !important;\n            display: block !important;\n            position: absolute !important;\n            z-index: 0 !important;\n            top: -55% !important;\n            left: -35% !important;\n            width: 170% !important;\n            height: 210% !important;\n            border-radius: 50% !important;\n            background:\n              conic-gradient(\n                from 0deg,\n                transparent 0deg 245deg,\n                #4f46e5 268deg,\n                #67a8ff 286deg,\n                #c084fc 304deg,\n                transparent 326deg 360deg\n              ) !important;\n            transform-origin: 50% 50% !important;\n            animation: kodvexaLedGirar 2.7s linear infinite !important;\n            pointer-events: none !important;\n          }\n\n          .vitrine-destaques__card::after {\n            content: \"\" !important;\n            display: block !important;\n            position: absolute !important;\n            z-index: 1 !important;\n            inset: 2px !important;\n            border-radius: 20px !important;\n            background: #fff !important;\n            box-shadow: inset 0 0 0 1px rgba(255,255,255,.45) !important;\n            pointer-events: none !important;\n          }\n\n          .vitrine-destaques__imagem,\n          .vitrine-destaques__conteudo {\n            position: relative !important;\n            z-index: 2 !important;\n          }\n\n          .vitrine-destaques__imagem {\n            margin: 0 !important;\n            border-radius: 20px 20px 0 0 !important;\n            overflow: hidden !important;\n          }\n\n          .vitrine-destaques__conteudo {\n            margin: 0 !important;\n            border-radius: 0 0 20px 20px !important;\n            background: #fff !important;\n          }\n\n          @keyframes kodvexaLedGirar {\n            from { transform: rotate(0deg); }\n            to { transform: rotate(360deg); }\n          }\n\n          @media (prefers-reduced-motion: reduce) {\n            .vitrine-destaques__card::before {\n              animation: none !important;\n            }\n          }\n\n  "}</style>
 
         <section className="loja-identidade">
           <div className="loja-identidade__logo">
@@ -2375,9 +602,9 @@ function Cardapio() {
             )}
 
             <div className="loja-identidade__meta">
-              <span className={loja.aberto ? 'aberto' : 'fechado'}>
+              <span className={abertoAgora ? 'aberto' : 'fechado'}>
                 <i />
-                {loja.aberto ? 'Aberto agora' : 'Fechado'}
+                {abertoAgora ? 'Aberto agora' : 'Fechado'}
               </span>
               <span><Clock3 size={13} /> {loja.tempo_medio_min || 40} min</span>
             </div>
@@ -2432,14 +659,23 @@ function Cardapio() {
                     key={produto.id}
                     className="vitrine-destaques__card"
                     onClick={() => abrirProduto(produto)}
+                    disabled={!abertoAgora || produto.disponivel === false}
+                    style={produto.disponivel === false ? { opacity: .62, cursor: 'not-allowed', position: 'relative' } : undefined}
                   >
                     <div className="vitrine-destaques__imagem">
                       {produto.imagem_url
                         ? <img src={produto.imagem_url} alt={produto.nome} />
                         : <ShoppingBag size={30} />}
 
-                      <span className="vitrine-destaques__badge">
-                        {temPromo ? 'OFERTA' : 'DESTAQUE'}
+                      <span
+                        className="vitrine-destaques__badge"
+                        style={produto.disponivel === false ? {
+                          background: '#991b1b',
+                          color: '#fff',
+                          borderColor: 'rgba(255,255,255,.22)',
+                        } : undefined}
+                      >
+                        {produto.disponivel === false ? 'ESGOTADO' : temPromo ? 'OFERTA' : 'DESTAQUE'}
                       </span>
                     </div>
 
@@ -2472,9 +708,17 @@ function Cardapio() {
               </div>
               <div className="produtos">
                 {lista.map((produto) => (
-                  <button className="produto" key={produto.id} onClick={() => abrirProduto(produto)}>
+                  <button
+                    className="produto"
+                    key={produto.id}
+                    onClick={() => abrirProduto(produto)}
+                    disabled={!abertoAgora || produto.disponivel === false}
+                    style={produto.disponivel === false ? { opacity: .62, cursor: 'not-allowed' } : undefined}
+                  >
                     <div className="produto__texto">
-                      {produto.destaque && <strong className="destaque">Mais pedido</strong>}
+                      {produto.disponivel === false
+                        ? <strong className="destaque" style={{ background: '#fee2e2', color: '#b91c1c' }}>ESGOTADO</strong>
+                        : produto.destaque && <strong className="destaque">Mais pedido</strong>}
                       <h3>{produto.nome}</h3>
                       <p>{produto.descricao}</p>
                       <b>{dinheiro(produto.preco_promocional || produto.preco)}</b>
@@ -2502,10 +746,17 @@ function Cardapio() {
           <Search size={19} />
           <span>Cardápio</span>
         </button>
-        <button type="button" className={carrinho.length ? 'tem-itens' : ''} onClick={() => setCarrinhoAberto(true)}>
+        <button
+          type="button"
+          className={carrinho.length && abertoAgora ? 'tem-itens' : ''}
+          disabled={!abertoAgora}
+          onClick={() => abertoAgora && setCarrinhoAberto(true)}
+          title={!abertoAgora ? 'Loja fechada' : 'Abrir carrinho'}
+          style={!abertoAgora ? { opacity: .45, cursor: 'not-allowed' } : undefined}
+        >
           <ShoppingBag size={19} />
-          <span>Carrinho</span>
-          {carrinho.length > 0 && <b>{carrinho.reduce((soma, item) => soma + item.quantidade, 0)}</b>}
+          <span>{abertoAgora ? 'Carrinho' : 'Fechado'}</span>
+          {abertoAgora && carrinho.length > 0 && <b>{carrinho.reduce((soma, item) => soma + item.quantidade, 0)}</b>}
         </button>
         <button type="button" onClick={() => alert('Acompanhamento de pedidos será a próxima etapa.')}>
           <Clock3 size={19} />
@@ -2513,7 +764,7 @@ function Cardapio() {
         </button>
       </nav>
 
-      {totalItens > 0 && (
+      {abertoAgora && totalItens > 0 && (
         <button className="barra-carrinho" onClick={() => setCarrinhoAberto(true)}>
           <span className="bolha">{totalItens}</span>
           <strong>Ver carrinho</strong>
@@ -2680,388 +931,7 @@ function Cardapio() {
 
       {carrinhoAberto && (
         <div className="modal-fundo carrinho-fundo-premium" onMouseDown={() => setCarrinhoAberto(false)}>
-          <style>{`
-            @media (max-width: 600px) {
-              .loja-mobile-nav.oculto-modal {
-                display: none !important;
-              }
-
-              .carrinho-fundo-premium {
-                position: fixed !important;
-                inset: 0 !important;
-                display: block !important;
-                padding: 0 !important;
-                background: #f7f9fc !important;
-                backdrop-filter: none !important;
-              }
-
-              .carrinho-premium {
-                position: fixed !important;
-                inset: 0 !important;
-                width: 100% !important;
-                max-width: none !important;
-                height: 100dvh !important;
-                max-height: 100dvh !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                display: flex !important;
-                flex-direction: column !important;
-                overflow: hidden !important;
-                border-radius: 0 !important;
-                background: #f7f9fc !important;
-                box-shadow: none !important;
-              }
-
-              .carrinho-premium__cabecalho {
-                flex: 0 0 auto;
-                min-height: 76px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                padding: 16px 18px 13px;
-                border-bottom: 1px solid #e9eef4;
-                background: #fff;
-              }
-
-              .carrinho-premium__titulo {
-                display: flex;
-                align-items: center;
-                gap: 11px;
-              }
-
-              .carrinho-premium__icone {
-                width: 44px;
-                height: 44px;
-                display: grid;
-                place-items: center;
-                flex: 0 0 44px;
-                border-radius: 14px;
-                background: color-mix(in srgb, var(--cor-loja) 10%, #fff);
-                color: var(--cor-loja);
-              }
-
-              .carrinho-premium__titulo h2 {
-                margin: 0;
-                color: #162033;
-                font-size: 1.13rem;
-              }
-
-              .carrinho-premium__titulo span {
-                display: block;
-                margin-top: 2px;
-                color: #8794a7;
-                font-size: .72rem;
-              }
-
-              .carrinho-premium__fechar {
-                width: 40px;
-                height: 40px;
-                display: grid;
-                place-items: center;
-                flex: 0 0 40px;
-                border: 1px solid #e7ecf2;
-                border-radius: 50%;
-                background: #f8fafc;
-                color: #65758a;
-              }
-
-              .carrinho-premium__scroll {
-                flex: 1 1 auto;
-                min-height: 0;
-                overflow-y: auto;
-                padding: 12px 14px 18px;
-                overscroll-behavior: contain;
-              }
-
-              .carrinho-premium__entrega {
-                display: grid;
-                gap: 10px;
-                margin-bottom: 12px;
-                padding: 14px;
-                border: 1px solid #e4eaf1;
-                border-radius: 18px;
-                background: linear-gradient(145deg, #fff, #fbfcff);
-                box-shadow: 0 7px 18px rgba(20, 34, 51, .05);
-              }
-
-              .carrinho-premium__entrega-topo {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-              }
-
-              .carrinho-premium__entrega-topo strong {
-                color: #172033;
-                font-size: .88rem;
-              }
-
-              .carrinho-premium__entrega-topo small {
-                color: #7e8da1;
-                font-size: .7rem;
-              }
-
-              .carrinho-premium__tipos {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 8px;
-              }
-
-              .carrinho-premium__tipos button {
-                min-height: 54px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-                border: 1px solid #dfe6ee;
-                border-radius: 14px;
-                background: #fff;
-                color: #56677d;
-                font: inherit;
-                font-size: .78rem;
-                font-weight: 850;
-              }
-
-              .carrinho-premium__tipos button.ativo {
-                border-color: var(--cor-loja);
-                background: color-mix(in srgb, var(--cor-loja) 8%, #fff);
-                color: var(--cor-loja);
-                box-shadow: 0 6px 16px color-mix(in srgb, var(--cor-loja) 13%, transparent);
-              }
-
-              .carrinho-premium__item {
-                display: grid;
-                grid-template-columns: 84px minmax(0, 1fr);
-                gap: 12px;
-                margin-bottom: 10px;
-                padding: 12px;
-                border: 1px solid #e3e9f0;
-                border-radius: 18px;
-                background: #fff;
-                box-shadow: 0 7px 18px rgba(20, 34, 51, .05);
-              }
-
-              .carrinho-premium__foto {
-                width: 84px;
-                height: 84px;
-                overflow: hidden;
-                border: 1px solid #edf1f5;
-                border-radius: 15px;
-                background: #f5f7fa;
-              }
-
-              .carrinho-premium__foto img {
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-              }
-
-              .carrinho-premium__sem-foto {
-                width: 100%;
-                height: 100%;
-                display: grid;
-                place-items: center;
-                color: #92a0b2;
-              }
-
-              .carrinho-premium__item-conteudo {
-                min-width: 0;
-                display: grid;
-                gap: 7px;
-              }
-
-              .carrinho-premium__item-topo {
-                display: flex;
-                align-items: flex-start;
-                justify-content: space-between;
-                gap: 9px;
-              }
-
-              .carrinho-premium__item-topo strong {
-                color: #172033;
-                font-size: .9rem;
-              }
-
-              .carrinho-premium__excluir {
-                width: 32px;
-                height: 32px;
-                display: grid;
-                place-items: center;
-                flex: 0 0 32px;
-                border: 1px solid #ffd9dc;
-                border-radius: 10px;
-                background: #fff5f6;
-                color: #e5484d;
-              }
-
-              .carrinho-premium__extras {
-                display: grid;
-                gap: 3px;
-              }
-
-              .carrinho-premium__extras small {
-                color: #718198;
-                font-size: .7rem;
-                line-height: 1.35;
-              }
-
-              .carrinho-premium__item-rodape {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 8px;
-              }
-
-              .carrinho-premium__item-rodape > strong {
-                color: #162033;
-                font-size: .9rem;
-              }
-
-              .carrinho-premium__item-rodape .quantidade {
-                min-height: 38px !important;
-              }
-
-              .carrinho-premium__mais {
-                width: 100%;
-                min-height: 52px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-                margin: 4px 0 12px;
-                padding: 0 14px;
-                border: 1px dashed #cfd9e6;
-                border-radius: 16px;
-                background: #fff;
-                color: #33445b;
-                font: inherit;
-              }
-
-              .carrinho-premium__mais span {
-                display: flex;
-                align-items: center;
-                gap: 9px;
-                font-size: .8rem;
-                font-weight: 850;
-              }
-
-              .carrinho-premium__resumo {
-                display: grid;
-                gap: 8px;
-                padding: 15px;
-                border: 1px solid #e3e9f0;
-                border-radius: 18px;
-                background: #fff;
-              }
-
-              .carrinho-premium__linha {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                color: #718198;
-                font-size: .78rem;
-              }
-
-              .carrinho-premium__linha strong {
-                color: #25344a;
-              }
-
-              .carrinho-premium__linha.total {
-                margin-top: 3px;
-                padding-top: 10px;
-                border-top: 1px solid #edf1f5;
-                color: #172033;
-                font-size: .9rem;
-                font-weight: 850;
-              }
-
-              .carrinho-premium__linha.total strong {
-                color: #101a29;
-                font-size: 1.08rem;
-              }
-
-              .carrinho-premium__rodape {
-                flex: 0 0 auto;
-                width: 100%;
-                padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
-                border-top: 1px solid #e6ebf1;
-                background: rgba(255,255,255,.99);
-                box-shadow: 0 -8px 22px rgba(20,34,51,.07);
-                backdrop-filter: blur(12px);
-              }
-
-              .carrinho-premium__continuar {
-                width: 100%;
-                min-height: 56px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                padding: 0 16px;
-                border: 0;
-                border-radius: 16px;
-                background: linear-gradient(135deg, var(--cor-loja), color-mix(in srgb, var(--cor-loja) 76%, #6d36ff));
-                color: #fff;
-                font: inherit;
-                box-shadow: 0 12px 26px color-mix(in srgb, var(--cor-loja) 25%, transparent);
-              }
-
-              .carrinho-premium__continuar span {
-                display: grid;
-                gap: 1px;
-                text-align: left;
-              }
-
-              .carrinho-premium__continuar span strong {
-                font-size: .9rem;
-              }
-
-              .carrinho-premium__continuar span small {
-                color: rgba(255,255,255,.75);
-                font-size: .65rem;
-              }
-
-              .carrinho-premium__continuar > strong {
-                font-size: .92rem;
-              }
-
-              .carrinho-premium__vazio {
-                min-height: 55dvh;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                gap: 9px;
-                padding: 30px;
-                text-align: center;
-              }
-
-              .carrinho-premium__vazio div {
-                width: 74px;
-                height: 74px;
-                display: grid;
-                place-items: center;
-                border-radius: 22px;
-                background: color-mix(in srgb, var(--cor-loja) 10%, #fff);
-                color: var(--cor-loja);
-              }
-
-              .carrinho-premium__vazio h3 {
-                margin: 0;
-                color: #172033;
-              }
-
-              .carrinho-premium__vazio p {
-                max-width: 260px;
-                margin: 0;
-                color: #8290a4;
-                font-size: .8rem;
-                line-height: 1.45;
-              }
-            }
-          `}</style>
+          <style>{"            @media (max-width: 600px) {\n              .loja-mobile-nav.oculto-modal {\n                display: none !important;\n              }\n\n              .carrinho-fundo-premium {\n                position: fixed !important;\n                inset: 0 !important;\n                display: block !important;\n                padding: 0 !important;\n                background: #f7f9fc !important;\n                backdrop-filter: none !important;\n              }\n\n              .carrinho-premium {\n                position: fixed !important;\n                inset: 0 !important;\n                width: 100% !important;\n                max-width: none !important;\n                height: 100dvh !important;\n                max-height: 100dvh !important;\n                margin: 0 !important;\n                padding: 0 !important;\n                display: flex !important;\n                flex-direction: column !important;\n                overflow: hidden !important;\n                border-radius: 0 !important;\n                background: #f7f9fc !important;\n                box-shadow: none !important;\n              }\n\n              .carrinho-premium__cabecalho {\n                flex: 0 0 auto;\n                min-height: 76px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 12px;\n                padding: 16px 18px 13px;\n                border-bottom: 1px solid #e9eef4;\n                background: #fff;\n              }\n\n              .carrinho-premium__titulo {\n                display: flex;\n                align-items: center;\n                gap: 11px;\n              }\n\n              .carrinho-premium__icone {\n                width: 44px;\n                height: 44px;\n                display: grid;\n                place-items: center;\n                flex: 0 0 44px;\n                border-radius: 14px;\n                background: color-mix(in srgb, var(--cor-loja) 10%, #fff);\n                color: var(--cor-loja);\n              }\n\n              .carrinho-premium__titulo h2 {\n                margin: 0;\n                color: #162033;\n                font-size: 1.13rem;\n              }\n\n              .carrinho-premium__titulo span {\n                display: block;\n                margin-top: 2px;\n                color: #8794a7;\n                font-size: .72rem;\n              }\n\n              .carrinho-premium__fechar {\n                width: 40px;\n                height: 40px;\n                display: grid;\n                place-items: center;\n                flex: 0 0 40px;\n                border: 1px solid #e7ecf2;\n                border-radius: 50%;\n                background: #f8fafc;\n                color: #65758a;\n              }\n\n              .carrinho-premium__scroll {\n                flex: 1 1 auto;\n                min-height: 0;\n                overflow-y: auto;\n                padding: 12px 14px 18px;\n                overscroll-behavior: contain;\n              }\n\n              .carrinho-premium__entrega {\n                display: grid;\n                gap: 10px;\n                margin-bottom: 12px;\n                padding: 14px;\n                border: 1px solid #e4eaf1;\n                border-radius: 18px;\n                background: linear-gradient(145deg, #fff, #fbfcff);\n                box-shadow: 0 7px 18px rgba(20, 34, 51, .05);\n              }\n\n              .carrinho-premium__entrega-topo {\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 10px;\n              }\n\n              .carrinho-premium__entrega-topo strong {\n                color: #172033;\n                font-size: .88rem;\n              }\n\n              .carrinho-premium__entrega-topo small {\n                color: #7e8da1;\n                font-size: .7rem;\n              }\n\n              .carrinho-premium__tipos {\n                display: grid;\n                grid-template-columns: 1fr 1fr;\n                gap: 8px;\n              }\n\n              .carrinho-premium__tipos button {\n                min-height: 54px;\n                display: flex;\n                align-items: center;\n                justify-content: center;\n                gap: 8px;\n                border: 1px solid #dfe6ee;\n                border-radius: 14px;\n                background: #fff;\n                color: #56677d;\n                font: inherit;\n                font-size: .78rem;\n                font-weight: 850;\n              }\n\n              .carrinho-premium__tipos button.ativo {\n                border-color: var(--cor-loja);\n                background: color-mix(in srgb, var(--cor-loja) 8%, #fff);\n                color: var(--cor-loja);\n                box-shadow: 0 6px 16px color-mix(in srgb, var(--cor-loja) 13%, transparent);\n              }\n\n              .carrinho-premium__item {\n                display: grid;\n                grid-template-columns: 84px minmax(0, 1fr);\n                gap: 12px;\n                margin-bottom: 10px;\n                padding: 12px;\n                border: 1px solid #e3e9f0;\n                border-radius: 18px;\n                background: #fff;\n                box-shadow: 0 7px 18px rgba(20, 34, 51, .05);\n              }\n\n              .carrinho-premium__foto {\n                width: 84px;\n                height: 84px;\n                overflow: hidden;\n                border: 1px solid #edf1f5;\n                border-radius: 15px;\n                background: #f5f7fa;\n              }\n\n              .carrinho-premium__foto img {\n                width: 100%;\n                height: 100%;\n                object-fit: cover;\n              }\n\n              .carrinho-premium__sem-foto {\n                width: 100%;\n                height: 100%;\n                display: grid;\n                place-items: center;\n                color: #92a0b2;\n              }\n\n              .carrinho-premium__item-conteudo {\n                min-width: 0;\n                display: grid;\n                gap: 7px;\n              }\n\n              .carrinho-premium__item-topo {\n                display: flex;\n                align-items: flex-start;\n                justify-content: space-between;\n                gap: 9px;\n              }\n\n              .carrinho-premium__item-topo strong {\n                color: #172033;\n                font-size: .9rem;\n              }\n\n              .carrinho-premium__excluir {\n                width: 32px;\n                height: 32px;\n                display: grid;\n                place-items: center;\n                flex: 0 0 32px;\n                border: 1px solid #ffd9dc;\n                border-radius: 10px;\n                background: #fff5f6;\n                color: #e5484d;\n              }\n\n              .carrinho-premium__extras {\n                display: grid;\n                gap: 3px;\n              }\n\n              .carrinho-premium__extras small {\n                color: #718198;\n                font-size: .7rem;\n                line-height: 1.35;\n              }\n\n              .carrinho-premium__item-rodape {\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 8px;\n              }\n\n              .carrinho-premium__item-rodape > strong {\n                color: #162033;\n                font-size: .9rem;\n              }\n\n              .carrinho-premium__item-rodape .quantidade {\n                min-height: 38px !important;\n              }\n\n              .carrinho-premium__mais {\n                width: 100%;\n                min-height: 52px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 10px;\n                margin: 4px 0 12px;\n                padding: 0 14px;\n                border: 1px dashed #cfd9e6;\n                border-radius: 16px;\n                background: #fff;\n                color: #33445b;\n                font: inherit;\n              }\n\n              .carrinho-premium__mais span {\n                display: flex;\n                align-items: center;\n                gap: 9px;\n                font-size: .8rem;\n                font-weight: 850;\n              }\n\n              .carrinho-premium__resumo {\n                display: grid;\n                gap: 8px;\n                padding: 15px;\n                border: 1px solid #e3e9f0;\n                border-radius: 18px;\n                background: #fff;\n              }\n\n              .carrinho-premium__linha {\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 12px;\n                color: #718198;\n                font-size: .78rem;\n              }\n\n              .carrinho-premium__linha strong {\n                color: #25344a;\n              }\n\n              .carrinho-premium__linha.total {\n                margin-top: 3px;\n                padding-top: 10px;\n                border-top: 1px solid #edf1f5;\n                color: #172033;\n                font-size: .9rem;\n                font-weight: 850;\n              }\n\n              .carrinho-premium__linha.total strong {\n                color: #101a29;\n                font-size: 1.08rem;\n              }\n\n              .carrinho-premium__rodape {\n                flex: 0 0 auto;\n                width: 100%;\n                padding: 12px 14px calc(14px + env(safe-area-inset-bottom));\n                border-top: 1px solid #e6ebf1;\n                background: rgba(255,255,255,.99);\n                box-shadow: 0 -8px 22px rgba(20,34,51,.07);\n                backdrop-filter: blur(12px);\n              }\n\n              .carrinho-premium__continuar {\n                width: 100%;\n                min-height: 56px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 12px;\n                padding: 0 16px;\n                border: 0;\n                border-radius: 16px;\n                background: linear-gradient(135deg, var(--cor-loja), color-mix(in srgb, var(--cor-loja) 76%, #6d36ff));\n                color: #fff;\n                font: inherit;\n                box-shadow: 0 12px 26px color-mix(in srgb, var(--cor-loja) 25%, transparent);\n              }\n\n              .carrinho-premium__continuar span {\n                display: grid;\n                gap: 1px;\n                text-align: left;\n              }\n\n              .carrinho-premium__continuar span strong {\n                font-size: .9rem;\n              }\n\n              .carrinho-premium__continuar span small {\n                color: rgba(255,255,255,.75);\n                font-size: .65rem;\n              }\n\n              .carrinho-premium__continuar > strong {\n                font-size: .92rem;\n              }\n\n              .carrinho-premium__vazio {\n                min-height: 55dvh;\n                display: flex;\n                flex-direction: column;\n                align-items: center;\n                justify-content: center;\n                gap: 9px;\n                padding: 30px;\n                text-align: center;\n              }\n\n              .carrinho-premium__vazio div {\n                width: 74px;\n                height: 74px;\n                display: grid;\n                place-items: center;\n                border-radius: 22px;\n                background: color-mix(in srgb, var(--cor-loja) 10%, #fff);\n                color: var(--cor-loja);\n              }\n\n              .carrinho-premium__vazio h3 {\n                margin: 0;\n                color: #172033;\n              }\n\n              .carrinho-premium__vazio p {\n                max-width: 260px;\n                margin: 0;\n                color: #8290a4;\n                font-size: .8rem;\n                line-height: 1.45;\n              }\n            }\n  "}</style>
 
           <aside className="carrinho carrinho-premium" onMouseDown={(e) => e.stopPropagation()}>
             <header className="carrinho-premium__cabecalho">
@@ -3204,7 +1074,9 @@ function Cardapio() {
                 <footer className="carrinho-premium__rodape">
                   <button
                     className="carrinho-premium__continuar"
+                    disabled={!abertoAgora}
                     onClick={() => {
+                      if (!abertoAgora) return
                       setCarrinhoAberto(false)
                       setCheckoutAberto(true)
                     }}
@@ -3274,7 +1146,12 @@ function Cardapio() {
             <div className="resumo-checkout"><span>Total do pedido</span><strong>{dinheiro(total + (formulario.tipo === 'entrega' && entregaCalculada?.valido ? entregaCalculada.taxa : 0))}</strong></div>
             {formulario.tipo === 'entrega' && entregaCalculada?.valido && <small className="taxa-aviso">Entrega: {entregaCalculada.taxa === 0 ? 'grátis' : dinheiro(entregaCalculada.taxa)} · distância {entregaCalculada.distanciaKm.toFixed(2).replace('.', ',')} km.</small>}
             {erroPedido && <p className="erro-pedido">{erroPedido}</p>}
-            <button className="primario enviar-pedido" disabled={enviando || (formulario.tipo === 'entrega' && !entregaCalculada?.valido)}>{enviando ? 'Enviando pedido...' : 'Confirmar pedido'}</button>
+            <button
+              className="primario enviar-pedido"
+              disabled={!abertoAgora || enviando || (formulario.tipo === 'entrega' && !entregaCalculada?.valido)}
+            >
+              {!abertoAgora ? 'Loja fechada' : enviando ? 'Enviando pedido...' : 'Confirmar pedido'}
+            </button>
           </form>
         </div>
       )}
@@ -3308,18 +1185,349 @@ const etapasPedido = [
   ['pronto', 'Pronto'], ['saiu_entrega', 'Saiu para entrega'], ['concluido', 'Concluído'],
 ]
 
+
+
+function ConviteEquipe() {
+  const [sessao, setSessao] = useState(null)
+  const [senha, setSenha] = useState('')
+  const [confirmarSenha, setConfirmarSenha] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
+  const [pronto, setPronto] = useState(false)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSessao(data.session)
+    })
+
+    const { data } = supabase.auth.onAuthStateChange((_evento, novaSessao) => {
+      setSessao(novaSessao)
+    })
+
+    return () => {
+      data.subscription.unsubscribe()
+    }
+  }, [])
+
+  async function concluirConvite(evento) {
+    evento.preventDefault()
+    setErro('')
+
+    if (!sessao || !sessao.user) {
+      setErro('Este convite não está mais válido. Peça ao dono para reenviar.')
+      return
+    }
+
+    if (senha.length < 6) {
+      setErro('A senha precisa ter pelo menos 6 caracteres.')
+      return
+    }
+
+    if (senha !== confirmarSenha) {
+      setErro('As senhas não conferem.')
+      return
+    }
+
+    setSalvando(true)
+
+    const { error: erroSenha } = await supabase.auth.updateUser({
+      password: senha,
+    })
+
+    if (erroSenha) {
+      setSalvando(false)
+      setErro(erroSenha.message || 'Não foi possível definir sua senha.')
+      return
+    }
+
+    const { data: estabelecimentoId, error: erroAceite } =
+      await supabase.rpc('aceitar_convite_equipe')
+
+    if (erroAceite) {
+      setSalvando(false)
+      setErro(erroAceite.message || 'Não foi possível concluir o convite.')
+      return
+    }
+
+    if (estabelecimentoId) {
+      localStorage.setItem('kodvexa_unidade_atual', estabelecimentoId)
+    }
+
+    setSalvando(false)
+    setPronto(true)
+
+    window.setTimeout(function () {
+      window.location.href = '/painel'
+    }, 1200)
+  }
+
+  if (pronto) {
+    return (
+      <main className="login-painel">
+        <form>
+          <div className="marca-painel">
+            <Store />
+            <span>KODVEXA FOOD</span>
+          </div>
+
+          <h1>Acesso liberado</h1>
+          <p>Seu acesso à equipe foi ativado. Abrindo o painel...</p>
+
+          <div
+            style={{
+              padding: 13,
+              border: '1px solid rgba(16,185,129,.35)',
+              borderRadius: 12,
+              background: 'rgba(6,78,59,.12)',
+              color: '#6ee7b7',
+              textAlign: 'center',
+              fontWeight: 850,
+            }}
+          >
+            Convite aceito
+          </div>
+        </form>
+      </main>
+    )
+  }
+
+  return (
+    <main className="login-painel">
+      <form onSubmit={concluirConvite}>
+        <div className="marca-painel">
+          <Store />
+          <span>KODVEXA FOOD</span>
+        </div>
+
+        <h1>Ativar meu acesso</h1>
+        <p>
+          Você foi convidado para uma equipe KODVEXA.
+          Defina sua senha para concluir.
+        </p>
+
+        {!sessao && (
+          <div className="erro-pedido">
+            Validando o link do convite...
+          </div>
+        )}
+
+        <label>
+          Nova senha
+          <input
+            type="password"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            minLength={6}
+            required
+          />
+        </label>
+
+        <label>
+          Confirmar senha
+          <input
+            type="password"
+            value={confirmarSenha}
+            onChange={(e) => setConfirmarSenha(e.target.value)}
+            minLength={6}
+            required
+          />
+        </label>
+
+        {erro && (
+          <div className="erro-pedido">
+            {erro}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          className="primario"
+          disabled={salvando || !sessao}
+        >
+          {salvando ? 'Abrindo pagamento...' : 'Ativar acesso'}
+        </button>
+      </form>
+    </main>
+  )
+}
+
+function CadastroFuncionario() {
+  const [email, setEmail] = useState('')
+  const [senha, setSenha] = useState('')
+  const [confirmarSenha, setConfirmarSenha] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
+  const [sucesso, setSucesso] = useState('')
+
+  async function cadastrar(evento) {
+    evento.preventDefault()
+    setErro('')
+    setSucesso('')
+
+    if (senha.length < 6) {
+      setErro('A senha precisa ter pelo menos 6 caracteres.')
+      return
+    }
+
+    if (senha !== confirmarSenha) {
+      setErro('As senhas não conferem.')
+      return
+    }
+
+    setSalvando(true)
+
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim().toLowerCase(),
+      password: senha,
+    })
+
+    if (data?.session) {
+      await supabase.auth.signOut()
+    }
+
+    setSalvando(false)
+
+    if (error) {
+      setErro(error.message || 'Não foi possível criar o acesso.')
+      return
+    }
+
+    setSucesso(
+      'Acesso criado. Agora o dono da loja pode adicionar este e-mail na equipe da unidade.'
+    )
+    setSenha('')
+    setConfirmarSenha('')
+  }
+
+  return (
+    <main className="login-painel">
+      <form onSubmit={cadastrar}>
+        <div className="marca-painel"><UserPlus /><span>KODVEXA FOOD</span></div>
+        <h1>Criar acesso de funcionário</h1>
+        <p>Crie seu login. Depois o dono libera a unidade e a função para este e-mail.</p>
+
+        <label>
+          E-mail
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </label>
+
+        <label>
+          Senha
+          <input
+            type="password"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            minLength={6}
+            required
+          />
+        </label>
+
+        <label>
+          Confirmar senha
+          <input
+            type="password"
+            value={confirmarSenha}
+            onChange={(e) => setConfirmarSenha(e.target.value)}
+            minLength={6}
+            required
+          />
+        </label>
+
+        {erro && <div className="erro-pedido">{erro}</div>}
+        {sucesso && (
+          <div
+            style={{
+              padding: 12,
+              border: '1px solid rgba(16,185,129,.35)',
+              borderRadius: 12,
+              background: 'rgba(6,78,59,.12)',
+              color: '#6ee7b7',
+              fontSize: '.8rem',
+              lineHeight: 1.45,
+            }}
+          >
+            {sucesso}
+          </div>
+        )}
+
+        <button className="primario" disabled={salvando}>
+          {salvando ? 'Criando acesso...' : 'Criar acesso'}
+        </button>
+
+        <Link
+          to="/painel"
+          style={{
+            display: 'block',
+            marginTop: 4,
+            color: '#7faeff',
+            textAlign: 'center',
+            fontSize: '.78rem',
+            fontWeight: 800,
+          }}
+        >
+          Já tenho acesso
+        </Link>
+      </form>
+    </main>
+  )
+}
+
 function LoginPainel({ pagina = 'pedidos' }) {
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
   const [erro, setErro] = useState('')
   const [entrando, setEntrando] = useState(false)
   const [sessao, setSessao] = useState(null)
+  const [funcaoAtual, setFuncaoAtual] = useState('')
+  const [checandoAcesso, setChecandoAcesso] = useState(false)
+  const [erroAcesso, setErroAcesso] = useState('')
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSessao(data.session))
     const { data } = supabase.auth.onAuthStateChange((_evento, novaSessao) => setSessao(novaSessao))
     return () => data.subscription.unsubscribe()
   }, [])
+
+  useEffect(() => {
+    let cancelado = false
+
+    async function carregarAcesso() {
+      if (!sessao?.user?.id) {
+        setFuncaoAtual('')
+        setErroAcesso('')
+        return
+      }
+
+      setChecandoAcesso(true)
+      setErroAcesso('')
+
+      try {
+        const contexto = await obterUnidadeAtualCompleta()
+        if (cancelado) return
+
+        const funcao = normalizarFuncaoAcesso(contexto?.unidade, contexto?.unidades)
+        setFuncaoAtual(funcao)
+
+        if (!contexto?.estabelecimento) {
+          setErroAcesso('Este usuário ainda não possui acesso a nenhuma unidade.')
+        }
+      } catch (e) {
+        if (!cancelado) {
+          setErroAcesso(e.message || 'Não foi possível verificar seu acesso.')
+        }
+      } finally {
+        if (!cancelado) setChecandoAcesso(false)
+      }
+    }
+
+    carregarAcesso()
+    return () => { cancelado = true }
+  }, [sessao?.user?.id])
 
   async function entrar(evento) {
     evento.preventDefault()
@@ -3331,9 +1539,31 @@ function LoginPainel({ pagina = 'pedidos' }) {
   }
 
   if (sessao) {
+    if (checandoAcesso) return <TelaCentral texto="Verificando acesso..." />
+    if (erroAcesso) return <TelaCentral texto={erroAcesso} erro />
+
+    const permissoes = {
+      dono: ['pedidos', 'cardapio', 'entregas', 'configuracoes', 'unidades', 'equipe'],
+      gerente: ['pedidos', 'cardapio', 'entregas'],
+      atendente: ['pedidos'],
+    }
+
+    const permitidas = permissoes[funcaoAtual] || ['pedidos']
+
+    if (!permitidas.includes(pagina)) {
+      return (
+        <TelaCentral
+          texto="Você não possui permissão para acessar esta área."
+          erro
+        />
+      )
+    }
+
     if (pagina === 'cardapio') return <PainelCardapio sessao={sessao} />
     if (pagina === 'configuracoes') return <PainelConfiguracoes sessao={sessao} />
     if (pagina === 'entregas') return <PainelEntregas sessao={sessao} />
+    if (pagina === 'unidades') return <PainelUnidades sessao={sessao} />
+    if (pagina === 'equipe') return <PainelEquipe sessao={sessao} />
     return <PainelRestaurante sessao={sessao} />
   }
 
@@ -3347,6 +1577,20 @@ function LoginPainel({ pagina = 'pedidos' }) {
         <label>Senha<input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} required /></label>
         {erro && <div className="erro-pedido">{erro}</div>}
         <button className="primario" disabled={entrando}>{entrando ? 'Entrando...' : 'Entrar'}</button>
+
+        <Link
+          to="/painel/cadastro"
+          style={{
+            display: 'block',
+            marginTop: 4,
+            color: '#7faeff',
+            textAlign: 'center',
+            fontSize: '.76rem',
+            fontWeight: 800,
+          }}
+        >
+          Funcionário novo? Criar acesso
+        </Link>
       </form>
     </main>
   )
@@ -3364,8 +1608,216 @@ const estilosMenuDesktop = `
 
 function NavegacaoPainel({ loja, ativo }) {
   const [menuMobileAberto, setMenuMobileAberto] = useState(false)
+  const [unidades, setUnidades] = useState([])
+  const [modalUnidadeAberto, setModalUnidadeAberto] = useState(false)
+  const [etapaFilial, setEtapaFilial] = useState('assinatura')
+  const [criandoUnidade, setCriandoUnidade] = useState(false)
+  const [erroUnidade, setErroUnidade] = useState('')
+  const [funcaoAtual, setFuncaoAtual] = useState('')
+  const [licencasDisponiveis, setLicencasDisponiveis] = useState(0)
+  const [carregandoLicencas, setCarregandoLicencas] = useState(false)
+  const [ativandoLicencaTeste, setAtivandoLicencaTeste] = useState(false)
+  const [matrizLicencaId, setMatrizLicencaId] = useState('')
+  const [formUnidade, setFormUnidade] = useState({
+    nome_unidade: '',
+    endereco: '',
+    cidade: '',
+    estado: '',
+    cep: '',
+    whatsapp: '',
+    copiar_cardapio: true,
+  })
 
   const fecharMenu = () => setMenuMobileAberto(false)
+  // O SQL já remove filiais excluídas da lista.
+  // Assim o limite considera somente Matriz + filiais ainda existentes.
+  const totalUnidadesAtivasNaRede = unidades.length
+  const limiteUnidadesAtingido = totalUnidadesAtivasNaRede >= 6
+  const ehDono = funcaoAtual === 'dono'
+  const ehGerente = funcaoAtual === 'gerente'
+  const podeOperarCardapio = ehDono || ehGerente
+
+  async function carregarUnidadesPainel() {
+    try {
+      const lista = await obterUnidadesUsuario()
+      setUnidades(lista)
+
+      const selecionada = lista.find((item) => item.estabelecimento_id === loja?.id)
+        || lista.find((item) => item.estabelecimento_id === localStorage.getItem('kodvexa_unidade_atual'))
+        || lista[0]
+
+      setFuncaoAtual(normalizarFuncaoAcesso(selecionada, lista))
+      return lista
+    } catch (erro) {
+      console.error('Erro ao carregar unidades:', erro)
+      return []
+    }
+  }
+
+  useEffect(() => {
+    carregarUnidadesPainel()
+  }, [])
+
+  async function carregarLicencasDisponiveis(matrizId) {
+    if (!matrizId) {
+      setLicencasDisponiveis(0)
+      return 0
+    }
+
+    setCarregandoLicencas(true)
+
+    const { data, error } = await supabase.rpc(
+      'get_licencas_filiais_disponiveis',
+      { p_matriz_id: matrizId }
+    )
+
+    setCarregandoLicencas(false)
+
+    if (error) {
+      console.warn('Não foi possível consultar licenças de filial:', error)
+      setLicencasDisponiveis(0)
+      return 0
+    }
+
+    const total = Number(data || 0)
+    setLicencasDisponiveis(total)
+    return total
+  }
+
+  async function iniciarPagamentoFilial() {
+    if (!matrizLicencaId) {
+      setErroUnidade('Não foi possível identificar a Matriz.')
+      return
+    }
+
+    setAtivandoLicencaTeste(true)
+    setErroUnidade('')
+
+    try {
+      const { data: sessaoData } = await supabase.auth.getSession()
+      const accessToken = sessaoData?.session?.access_token
+
+      if (!accessToken) {
+        throw new Error('Sua sessão expirou. Entre novamente no painel.')
+      }
+
+      const resposta = await fetch('/api/mercadopago-criar-filial', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ matriz_id: matrizLicencaId }),
+      })
+
+      const dados = await resposta.json().catch(() => ({}))
+
+      if (!resposta.ok) {
+        throw new Error(dados?.error || 'Não foi possível iniciar o pagamento da filial.')
+      }
+
+      if (!dados?.checkout_url) {
+        throw new Error('O Mercado Pago não retornou o link de pagamento.')
+      }
+
+      window.location.href = dados.checkout_url
+    } catch (erro) {
+      setAtivandoLicencaTeste(false)
+      setErroUnidade(erro?.message || 'Não foi possível iniciar o pagamento da filial.')
+    }
+  }
+
+  async function abrirModalNovaUnidade() {
+    if (limiteUnidadesAtingido) return
+
+    setErroUnidade('')
+    setEtapaFilial('assinatura')
+
+    const matriz = unidades.find((unidade) => unidade.tipo_unidade === 'matriz')
+    const matrizId =
+      matriz?.estabelecimento_id ||
+      (loja?.tipo_unidade === 'matriz' ? loja?.id : loja?.matriz_id)
+
+    setMatrizLicencaId(matrizId || '')
+    await carregarLicencasDisponiveis(matrizId)
+
+    setFormUnidade({
+      nome_unidade: '',
+      endereco: '',
+      cidade: loja?.cidade || '',
+      estado: loja?.estado || '',
+      cep: '',
+      whatsapp: '',
+      copiar_cardapio: true,
+    })
+    setModalUnidadeAberto(true)
+  }
+
+  function alterarCampoUnidade(campo, valor) {
+    setFormUnidade((atual) => ({ ...atual, [campo]: valor }))
+  }
+
+  async function criarNovaUnidade(evento) {
+    evento.preventDefault()
+    setErroUnidade('')
+
+    if (limiteUnidadesAtingido) {
+      setErroUnidade('Limite de 6 unidades atingido: 1 Matriz + até 5 filiais.')
+      return
+    }
+
+    if (licencasDisponiveis <= 0) {
+      setErroUnidade('Esta filial precisa de uma licença adicional ativa antes de ser criada.')
+      return
+    }
+
+    if (!formUnidade.nome_unidade.trim()) {
+      setErroUnidade('Digite o nome da unidade.')
+      return
+    }
+
+    const matriz = unidades.find((unidade) => unidade.tipo_unidade === 'matriz')
+    const matrizId = matriz?.estabelecimento_id || (loja?.tipo_unidade === 'matriz' ? loja?.id : loja?.matriz_id)
+
+    if (!matrizId) {
+      setErroUnidade('Não foi possível identificar a matriz desta empresa.')
+      return
+    }
+
+    setCriandoUnidade(true)
+
+    try {
+      const { data: novaFilialId, error: erroCriar } = await supabase.rpc('criar_filial', {
+        p_matriz_id: matrizId,
+        p_nome_unidade: formUnidade.nome_unidade.trim(),
+        p_endereco: formUnidade.endereco.trim() || null,
+        p_cidade: formUnidade.cidade.trim() || null,
+        p_estado: formUnidade.estado.trim() || null,
+        p_cep: formUnidade.cep.trim() || null,
+        p_whatsapp: formUnidade.whatsapp.trim() || null,
+      })
+
+      if (erroCriar) throw erroCriar
+      if (!novaFilialId) throw new Error('A filial foi criada, mas o sistema não recebeu o ID da nova unidade.')
+
+      if (formUnidade.copiar_cardapio) {
+        const { error: erroCopiar } = await supabase.rpc('copiar_cardapio_para_filial', {
+          p_matriz_id: matrizId,
+          p_filial_id: novaFilialId,
+        })
+        if (erroCopiar) throw new Error(`A unidade foi criada, mas não foi possível copiar o cardápio: ${erroCopiar.message}`)
+      }
+
+      localStorage.setItem('kodvexa_unidade_atual', novaFilialId)
+      await carregarUnidadesPainel()
+      setModalUnidadeAberto(false)
+      window.location.reload()
+    } catch (erro) {
+      setErroUnidade(erro?.message || 'Não foi possível criar a unidade agora.')
+    } finally {
+      setCriandoUnidade(false)
+    }
+  }
 
   return (
     <>
@@ -3375,7 +1827,298 @@ function NavegacaoPainel({ loja, ativo }) {
           display: none;
         }
 
+        .seletor-unidade {
+          margin: 14px 0 4px;
+          padding: 12px;
+          border: 1px solid #24364d;
+          border-radius: 14px;
+          background: rgba(255,255,255,.045);
+        }
+
+        .seletor-unidade > span {
+          display: block;
+          margin-bottom: 7px;
+          color: #6f89aa;
+          font-size: .59rem;
+          font-weight: 900;
+          letter-spacing: .08em;
+        }
+
+        .seletor-unidade__campo {
+          position: relative;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .seletor-unidade__campo svg {
+          flex: 0 0 auto;
+          color: #6fa2ff;
+        }
+
+        .seletor-unidade select {
+          width: 100%;
+          min-width: 0;
+          min-height: 42px;
+          padding: 0 10px;
+          border: 1px solid #304660;
+          border-radius: 11px;
+          outline: none;
+          background: #0d1c2e;
+          color: #edf5ff;
+          font: inherit;
+          font-size: .78rem;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .seletor-unidade small {
+          display: block;
+          margin-top: 7px;
+          color: #70839b;
+          font-size: .65rem;
+          line-height: 1.35;
+        }
+
+        .seletor-unidade__adicionar {
+          width: 100%;
+          min-height: 38px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          margin-top: 10px;
+          border: 1px dashed #355579;
+          border-radius: 10px;
+          background: rgba(65,129,255,.08);
+          color: #8eb6ff;
+          font: inherit;
+          font-size: .72rem;
+          font-weight: 900;
+          cursor: pointer;
+          transition: .18s ease;
+        }
+
+        .seletor-unidade__adicionar:hover {
+          border-color: #5b8fe7;
+          background: rgba(65,129,255,.15);
+          color: #fff;
+        }
+
+        .modal-unidade-overlay {
+          position: fixed;
+          z-index: 5000;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          padding: 18px;
+          background: rgba(2,8,17,.72);
+          backdrop-filter: blur(8px);
+        }
+
+        .modal-unidade {
+          width: min(620px, 100%);
+          max-height: 92dvh;
+          overflow-y: auto;
+          border: 1px solid #29415f;
+          border-radius: 22px;
+          background: linear-gradient(180deg, #0d1b2d, #091522);
+          box-shadow: 0 28px 80px rgba(0,0,0,.48);
+          color: #eef5ff;
+        }
+
+        .modal-unidade__topo {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 20px 20px 15px;
+          border-bottom: 1px solid #223750;
+        }
+
+        .modal-unidade__topo span {
+          display: block;
+          margin-bottom: 5px;
+          color: #72a5ff;
+          font-size: .62rem;
+          font-weight: 950;
+          letter-spacing: .1em;
+        }
+
+        .modal-unidade__topo h2 {
+          margin: 0;
+          font-size: 1.25rem;
+        }
+
+        .modal-unidade__topo p {
+          margin: 6px 0 0;
+          color: #8ba0ba;
+          font-size: .78rem;
+        }
+
+        .modal-unidade__fechar {
+          width: 38px;
+          height: 38px;
+          display: grid;
+          place-items: center;
+          flex: 0 0 38px;
+          border: 1px solid #304761;
+          border-radius: 11px;
+          background: #12243a;
+          color: #dceaff;
+          cursor: pointer;
+        }
+
+        .modal-unidade form {
+          padding: 18px 20px 20px;
+        }
+
+        .modal-unidade__grade {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 13px;
+        }
+
+        .modal-unidade label {
+          display: grid;
+          gap: 6px;
+          color: #a9bad0;
+          font-size: .72rem;
+          font-weight: 800;
+        }
+
+        .modal-unidade label.campo-largo {
+          grid-column: 1 / -1;
+        }
+
+        .modal-unidade input {
+          width: 100%;
+          min-height: 44px;
+          padding: 0 12px;
+          border: 1px solid #2c435d;
+          border-radius: 11px;
+          outline: none;
+          background: #0a1727;
+          color: #f4f8ff;
+          font: inherit;
+        }
+
+        .modal-unidade input:focus {
+          border-color: #4f87e7;
+          box-shadow: 0 0 0 3px rgba(79,135,231,.12);
+        }
+
+        .modal-unidade__copiar {
+          grid-column: 1 / -1;
+          display: flex !important;
+          grid-template-columns: none !important;
+          flex-direction: row;
+          align-items: center;
+          gap: 10px !important;
+          margin-top: 3px;
+          padding: 13px 14px;
+          border: 1px solid #2c4562;
+          border-radius: 13px;
+          background: rgba(70,126,217,.08);
+          cursor: pointer;
+        }
+
+        .modal-unidade__copiar input {
+          width: 18px;
+          min-height: 18px;
+          height: 18px;
+          flex: 0 0 18px;
+          accent-color: #4d86ee;
+        }
+
+        .modal-unidade__copiar strong {
+          display: block;
+          color: #edf5ff;
+          font-size: .77rem;
+        }
+
+        .modal-unidade__copiar small {
+          display: block;
+          margin-top: 2px;
+          color: #8298b5;
+          font-size: .67rem;
+          font-weight: 600;
+        }
+
+        .modal-unidade__erro {
+          margin-top: 13px;
+          padding: 10px 12px;
+          border: 1px solid rgba(248,113,113,.28);
+          border-radius: 11px;
+          background: rgba(248,113,113,.08);
+          color: #ffb6b6;
+          font-size: .73rem;
+          font-weight: 750;
+        }
+
+        .modal-unidade__acoes {
+          display: flex;
+          justify-content: flex-end;
+          gap: 9px;
+          margin-top: 17px;
+          padding-top: 15px;
+          border-top: 1px solid #20344b;
+        }
+
+        .modal-unidade__acoes button {
+          min-height: 42px;
+          padding: 0 16px;
+          border-radius: 11px;
+          font: inherit;
+          font-size: .75rem;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .modal-unidade__cancelar {
+          border: 1px solid #30465f;
+          background: #101f31;
+          color: #b9c9dc;
+        }
+
+        .modal-unidade__criar {
+          border: 1px solid #3978e8;
+          background: linear-gradient(135deg, #1763ee, #4b8dff);
+          color: #fff;
+          box-shadow: 0 10px 24px rgba(23,99,238,.22);
+        }
+
+        .modal-unidade__acoes button:disabled {
+          opacity: .58;
+          cursor: wait;
+        }
+
         @media (max-width: 720px) {
+          .modal-unidade-overlay {
+            align-items: end;
+            padding: 8px;
+          }
+
+          .modal-unidade {
+            width: 100%;
+            max-height: 94dvh;
+            border-radius: 20px 20px 14px 14px;
+          }
+
+          .modal-unidade__grade {
+            grid-template-columns: 1fr;
+          }
+
+          .modal-unidade label.campo-largo,
+          .modal-unidade__copiar {
+            grid-column: 1;
+          }
+
+          .modal-unidade__acoes {
+            display: grid;
+            grid-template-columns: 1fr 1.25fr;
+          }
+
           .painel-food {
             padding-bottom: 20px !important;
           }
@@ -3606,21 +2349,68 @@ function NavegacaoPainel({ loja, ativo }) {
           </button>
         </div>
 
+        {unidades.length > 0 && ehDono && (
+          <div className="seletor-unidade">
+            <span>UNIDADE ATUAL</span>
+            <div className="seletor-unidade__campo">
+              <MapPin size={17} />
+              <select
+                value={loja?.id || localStorage.getItem('kodvexa_unidade_atual') || ''}
+                onChange={(e) => selecionarUnidadePainel(e.target.value)}
+              >
+                {unidades.map((unidade) => (
+                  <option key={unidade.estabelecimento_id} value={unidade.estabelecimento_id}>
+                    {unidade.nome_unidade || unidade.nome || (unidade.tipo_unidade === 'matriz' ? 'Matriz' : 'Filial')}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <small>{loja?.tipo_unidade === 'filial' ? 'Filial selecionada' : 'Matriz selecionada'}</small>
+            <button
+              type="button"
+              className="seletor-unidade__adicionar"
+              onClick={abrirModalNovaUnidade}
+              disabled={limiteUnidadesAtingido}
+              title={limiteUnidadesAtingido ? 'Máximo de 3 unidades: 1 Matriz + 2 filiais' : 'Adicionar unidade'}
+              style={limiteUnidadesAtingido ? { opacity: .5, cursor: 'not-allowed' } : undefined}
+            >
+              <Plus size={15} />
+              <span>{limiteUnidadesAtingido ? 'Limite de 3 unidades' : 'Adicionar unidade'}</span>
+            </button>
+          </div>
+        )}
+
         <div className="rotulo-menu">GESTÃO</div>
 
         <nav className="menu-painel">
           <Link onClick={fecharMenu} className={ativo === 'pedidos' ? 'ativo' : ''} to="/painel">
             <ShoppingBag /><span>Pedidos</span>
           </Link>
-          <Link onClick={fecharMenu} className={ativo === 'cardapio' ? 'ativo' : ''} to="/painel/cardapio">
-            <ChefHat /><span>Cardápio</span>
-          </Link>
-          <Link onClick={fecharMenu} className={ativo === 'entregas' ? 'ativo' : ''} to="/painel/entregas">
-            <Bike /><span>Entregas</span>
-          </Link>
-          <Link onClick={fecharMenu} className={ativo === 'configuracoes' ? 'ativo' : ''} to="/painel/configuracoes">
-            <Store /><span>Configurações</span>
-          </Link>
+
+          {podeOperarCardapio && (
+            <>
+              <Link onClick={fecharMenu} className={ativo === 'cardapio' ? 'ativo' : ''} to="/painel/cardapio">
+                <ChefHat /><span>Cardápio</span>
+              </Link>
+              <Link onClick={fecharMenu} className={ativo === 'entregas' ? 'ativo' : ''} to="/painel/entregas">
+                <Bike /><span>Entregas</span>
+              </Link>
+            </>
+          )}
+
+          {ehDono && (
+            <>
+              <Link onClick={fecharMenu} className={ativo === 'configuracoes' ? 'ativo' : ''} to="/painel/configuracoes">
+                <Store /><span>Configurações</span>
+              </Link>
+              <Link onClick={fecharMenu} className={ativo === 'unidades' ? 'ativo' : ''} to="/painel/unidades">
+                <LayoutGrid /><span>Unidades</span>
+              </Link>
+              <Link onClick={fecharMenu} className={ativo === 'equipe' ? 'ativo' : ''} to="/painel/equipe">
+                <Users /><span>Equipe</span>
+              </Link>
+            </>
+          )}
         </nav>
 
         <div className="lateral-resumo">
@@ -3640,7 +2430,1614 @@ function NavegacaoPainel({ loja, ativo }) {
           </button>
         </div>
       </aside>
+
+      {modalUnidadeAberto && (
+        <div className="modal-unidade-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !criandoUnidade) setModalUnidadeAberto(false) }}>
+          <div className="modal-unidade">
+            <div className="modal-unidade__topo">
+              <div>
+                <span>NOVA UNIDADE</span>
+                <h2>Adicionar filial</h2>
+                <p>Conheça a assinatura da filial antes de cadastrar a nova unidade.</p>
+              </div>
+              <button type="button" className="modal-unidade__fechar" onClick={() => !criandoUnidade && setModalUnidadeAberto(false)}>
+                <X size={19} />
+              </button>
+            </div>
+
+            {etapaFilial === 'assinatura' ? (
+              <div style={{ padding: '6px 0 2px' }}>
+                <div
+                  style={{
+                    overflow: 'hidden',
+                    border: '1px solid rgba(74,116,165,.28)',
+                    borderRadius: 18,
+                    background: '#0c1d31',
+                    boxShadow: '0 22px 55px rgba(0,0,0,.22)',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0,1fr) 265px',
+                      gap: 0,
+                    }}
+                  >
+                    <div style={{ padding: '26px 28px 24px' }}>
+                      <span
+                        style={{
+                          color: '#6ea8ff',
+                          fontSize: '.66rem',
+                          fontWeight: 950,
+                          letterSpacing: '.11em',
+                        }}
+                      >
+                        EXPANSÃO DA REDE
+                      </span>
+
+                      <h3
+                        style={{
+                          margin: '9px 0 8px',
+                          maxWidth: 420,
+                          color: '#f5f8fc',
+                          fontSize: '1.55rem',
+                          lineHeight: 1.15,
+                          letterSpacing: '-.025em',
+                        }}
+                      >
+                        Sua próxima unidade, no mesmo KODVEXA
+                      </h3>
+
+                      <p
+                        style={{
+                          maxWidth: 450,
+                          margin: 0,
+                          color: '#8fa4bb',
+                          fontSize: '.78rem',
+                          lineHeight: 1.55,
+                        }}
+                      >
+                        Adicione uma filial sem criar outra conta. A operação continua organizada por unidade.
+                      </p>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 18,
+                          marginTop: 24,
+                          paddingTop: 18,
+                          borderTop: '1px solid rgba(148,163,184,.12)',
+                        }}
+                      >
+                        <div>
+                          <strong style={{ display: 'block', color: '#e3ebf5', fontSize: '.73rem' }}>
+                            Até 5 filiais
+                          </strong>
+                          <span style={{ color: '#70869e', fontSize: '.65rem' }}>
+                            além da Matriz
+                          </span>
+                        </div>
+
+                        <div>
+                          <strong style={{ display: 'block', color: '#e3ebf5', fontSize: '.73rem' }}>
+                            Gestão centralizada
+                          </strong>
+                          <span style={{ color: '#70869e', fontSize: '.65rem' }}>
+                            uma única conta
+                          </span>
+                        </div>
+
+                        <div>
+                          <strong style={{ display: 'block', color: '#e3ebf5', fontSize: '.73rem' }}>
+                            Operação por unidade
+                          </strong>
+                          <span style={{ color: '#70869e', fontSize: '.65rem' }}>
+                            pedidos e equipe separados
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'center',
+                        padding: '24px 22px',
+                        borderLeft: '1px solid rgba(148,163,184,.13)',
+                        background: 'rgba(15,38,64,.72)',
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: '#8299b2',
+                          fontSize: '.64rem',
+                          fontWeight: 900,
+                          letterSpacing: '.08em',
+                        }}
+                      >
+                        POR FILIAL
+                      </span>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'baseline',
+                          gap: 5,
+                          margin: '9px 0 4px',
+                        }}
+                      >
+                        <strong
+                          style={{
+                            color: '#fff',
+                            fontSize: '2.05rem',
+                            lineHeight: 1,
+                            letterSpacing: '-.045em',
+                          }}
+                        >
+                          R$ 29,90
+                        </strong>
+                        <span style={{ color: '#8299b2', fontSize: '.7rem' }}>/mês</span>
+                      </div>
+
+                      <span style={{ color: '#6f869e', fontSize: '.66rem', lineHeight: 1.4 }}>
+                        valor adicional ao seu plano
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={
+                          licencasDisponiveis > 0
+                            ? () => setEtapaFilial('cadastro')
+                            : iniciarPagamentoFilial
+                        }
+                        disabled={ativandoLicencaTeste || carregandoLicencas}
+                        style={{
+                          width: '100%',
+                          minHeight: 46,
+                          marginTop: 20,
+                          border: '1px solid #4d8df7',
+                          borderRadius: 10,
+                          background: '#3478e5',
+                          color: '#fff',
+                          fontWeight: 950,
+                          cursor: ativandoLicencaTeste ? 'wait' : 'pointer',
+                          opacity: ativandoLicencaTeste ? .65 : 1,
+                          boxShadow: '0 8px 22px rgba(52,120,229,.18)',
+                        }}
+                      >
+                        {ativandoLicencaTeste
+                          ? 'Abrindo pagamento...'
+                          : licencasDisponiveis > 0
+                            ? 'Cadastrar filial'
+                            : 'Adicionar filial'}
+                      </button>
+
+                      <span
+                        style={{
+                          display: 'block',
+                          marginTop: 10,
+                          color: '#687f97',
+                          fontSize: '.62rem',
+                          textAlign: 'center',
+                        }}
+                      >
+                        Cadastro liberado após a ativação
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                      flexWrap: 'wrap',
+                      padding: '11px 28px',
+                      borderTop: '1px solid rgba(148,163,184,.12)',
+                      background: 'rgba(5,15,27,.28)',
+                      color: '#71879f',
+                      fontSize: '.65rem',
+                    }}
+                  >
+                    <span>
+                      Plano atual <strong style={{ color: '#bac8d7' }}>R$ 79,90/mês</strong>
+                    </span>
+                    <span>
+                      5 filiais <strong style={{ color: '#dbe6f2' }}>R$ 229,40/mês no total</strong>
+                    </span>
+                  </div>
+                </div>
+
+                {erroUnidade && (
+                  <div className="modal-unidade__erro" style={{ marginTop: 12 }}>
+                    {erroUnidade}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    marginBottom: 15,
+                    padding: '11px 13px',
+                    border: '1px solid rgba(16,185,129,.25)',
+                    borderRadius: 13,
+                    background: 'rgba(6,78,59,.10)',
+                  }}
+                >
+                  <div>
+                    <strong style={{ display: 'block', color: '#6ee7b7', fontSize: '.74rem' }}>
+                      ✓ Assinatura ativa
+                    </strong>
+                    <span style={{ display: 'block', marginTop: 2, color: '#8299b2', fontSize: '.66rem' }}>
+                      Agora cadastre os dados da nova filial.
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setEtapaFilial('assinatura')}
+                    style={{
+                      border: 0,
+                      background: 'transparent',
+                      color: '#8aa2bd',
+                      fontSize: '.68rem',
+                      fontWeight: 850,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Voltar
+                  </button>
+                </div>
+
+            <form onSubmit={criarNovaUnidade}>
+              <div className="modal-unidade__grade">
+                <label className="campo-largo">
+                  Nome da unidade
+                  <input
+                    value={formUnidade.nome_unidade}
+                    onChange={(e) => alterarCampoUnidade('nome_unidade', e.target.value)}
+                    placeholder="Ex.: Zona Norte, Viamão, Centro"
+                    autoFocus
+                  />
+                </label>
+
+                <label className="campo-largo">
+                  Endereço
+                  <input
+                    value={formUnidade.endereco}
+                    onChange={(e) => alterarCampoUnidade('endereco', e.target.value)}
+                    placeholder="Rua, número e bairro"
+                  />
+                </label>
+
+                <label>
+                  Cidade
+                  <input
+                    value={formUnidade.cidade}
+                    onChange={(e) => alterarCampoUnidade('cidade', e.target.value)}
+                    placeholder="Porto Alegre"
+                  />
+                </label>
+
+                <label>
+                  Estado
+                  <input
+                    value={formUnidade.estado}
+                    onChange={(e) => alterarCampoUnidade('estado', e.target.value.toUpperCase().slice(0, 2))}
+                    placeholder="RS"
+                    maxLength={2}
+                  />
+                </label>
+
+                <label>
+                  CEP
+                  <input
+                    value={formUnidade.cep}
+                    onChange={(e) => alterarCampoUnidade('cep', e.target.value)}
+                    placeholder="00000-000"
+                  />
+                </label>
+
+                <label>
+                  WhatsApp
+                  <input
+                    value={formUnidade.whatsapp}
+                    onChange={(e) => alterarCampoUnidade('whatsapp', e.target.value)}
+                    placeholder="(51) 99999-9999"
+                  />
+                </label>
+
+                <label className="modal-unidade__copiar">
+                  <input
+                    type="checkbox"
+                    checked={formUnidade.copiar_cardapio}
+                    onChange={(e) => alterarCampoUnidade('copiar_cardapio', e.target.checked)}
+                  />
+                  <span>
+                    <strong>Copiar cardápio da Matriz</strong>
+                    <small>Cria a filial já com categorias, produtos e adicionais cadastrados.</small>
+                  </span>
+                </label>
+              </div>
+
+              {erroUnidade && <div className="modal-unidade__erro">{erroUnidade}</div>}
+
+              <div className="modal-unidade__acoes">
+                <button type="button" className="modal-unidade__cancelar" disabled={criandoUnidade} onClick={() => setModalUnidadeAberto(false)}>
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="modal-unidade__criar"
+                  disabled={criandoUnidade || carregandoLicencas || licencasDisponiveis <= 0}
+                >
+                  {carregandoLicencas
+                    ? 'Verificando licença...'
+                    : criandoUnidade
+                      ? 'Criando unidade...'
+                      : licencasDisponiveis > 0
+                        ? 'Criar unidade'
+                        : 'Licença necessária'}
+                </button>
+              </div>
+            </form>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </>
+  )
+}
+
+
+
+function PainelEquipe({ sessao }) {
+  const [loja, setLoja] = useState(null)
+  const [membros, setMembros] = useState([])
+  const [convites, setConvites] = useState([])
+  const [email, setEmail] = useState('')
+  const [funcao, setFuncao] = useState('atendente')
+  const [carregando, setCarregando] = useState(true)
+  const [salvando, setSalvando] = useState(false)
+  const [processandoConviteId, setProcessandoConviteId] = useState('')
+  const [erro, setErro] = useState('')
+  const [mensagem, setMensagem] = useState('')
+
+  async function carregarEquipe(estabelecimentoId) {
+    const [{ data: equipe, error: erroEquipe }, { data: pendentes, error: erroConvites }] =
+      await Promise.all([
+        supabase.rpc('get_equipe_unidade', {
+          p_estabelecimento_id: estabelecimentoId,
+        }),
+        supabase.rpc('get_convites_equipe_unidade', {
+          p_estabelecimento_id: estabelecimentoId,
+        }),
+      ])
+
+    if (erroEquipe || erroConvites) {
+      setErro(
+        erroEquipe?.message ||
+        erroConvites?.message ||
+        'Não foi possível carregar a equipe.'
+      )
+      return
+    }
+
+    setMembros(equipe || [])
+    setConvites(pendentes || [])
+  }
+
+  useEffect(() => {
+    let cancelado = false
+
+    async function carregar() {
+      setCarregando(true)
+      setErro('')
+
+      try {
+        const contexto = await obterUnidadeAtualCompleta()
+        if (cancelado) return
+
+        if (!contexto?.estabelecimento) {
+          setErro('Unidade não encontrada.')
+          setCarregando(false)
+          return
+        }
+
+        if (normalizarFuncaoAcesso(contexto?.unidade, contexto?.unidades) !== 'dono') {
+          setErro('Somente o dono pode gerenciar a equipe.')
+          setCarregando(false)
+          return
+        }
+
+        setLoja(contexto.estabelecimento)
+        await carregarEquipe(contexto.estabelecimento.id)
+      } catch (e) {
+        if (!cancelado) setErro(e.message || 'Não foi possível abrir a equipe.')
+      } finally {
+        if (!cancelado) setCarregando(false)
+      }
+    }
+
+    carregar()
+    return () => { cancelado = true }
+  }, [sessao.user.id])
+
+  async function enviarEmailConvite(emailDestino) {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: emailDestino,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: `${window.location.origin}/painel/convite`,
+      },
+    })
+
+    if (error) throw error
+  }
+
+  async function adicionar(evento) {
+    evento.preventDefault()
+    if (!loja?.id) return
+
+    const emailLimpo = email.trim().toLowerCase()
+
+    setSalvando(true)
+    setErro('')
+    setMensagem('')
+
+    const { data: conviteId, error: erroBanco } = await supabase.rpc(
+      'criar_convite_equipe',
+      {
+        p_estabelecimento_id: loja.id,
+        p_email: emailLimpo,
+        p_funcao: funcao,
+      }
+    )
+
+    if (erroBanco) {
+      setSalvando(false)
+      setErro(erroBanco.message || 'Não foi possível criar o convite.')
+      return
+    }
+
+    try {
+      await enviarEmailConvite(emailLimpo)
+    } catch (e) {
+      if (conviteId) {
+        await supabase.rpc('cancelar_convite_equipe', {
+          p_convite_id: conviteId,
+        })
+      }
+
+      setSalvando(false)
+      setErro(
+        e.message ||
+        'O convite foi preparado, mas o Supabase não conseguiu enviar o e-mail.'
+      )
+      return
+    }
+
+    setSalvando(false)
+    setEmail('')
+    setFuncao('atendente')
+    setMensagem(`Convite enviado para ${emailLimpo}.`)
+    await carregarEquipe(loja.id)
+  }
+
+  async function reenviarConvite(convite) {
+    if (!convite?.id) return
+
+    setProcessandoConviteId(convite.id)
+    setErro('')
+    setMensagem('')
+
+    try {
+      await enviarEmailConvite(convite.email)
+      setMensagem(`Convite reenviado para ${convite.email}.`)
+    } catch (e) {
+      setErro(e.message || 'Não foi possível reenviar o convite.')
+    } finally {
+      setProcessandoConviteId('')
+    }
+  }
+
+  async function cancelarConvite(conviteId) {
+    if (!loja?.id || !conviteId) return
+    if (!window.confirm('Cancelar este convite?')) return
+
+    setProcessandoConviteId(conviteId)
+    setErro('')
+    setMensagem('')
+
+    const { error } = await supabase.rpc('cancelar_convite_equipe', {
+      p_convite_id: conviteId,
+    })
+
+    setProcessandoConviteId('')
+
+    if (error) {
+      setErro(error.message || 'Não foi possível cancelar o convite.')
+      return
+    }
+
+    setMensagem('Convite cancelado.')
+    await carregarEquipe(loja.id)
+  }
+
+  async function alterarFuncao(usuarioId, novaFuncao) {
+    if (!loja?.id) return
+
+    setErro('')
+    setMensagem('')
+
+    const { error } = await supabase.rpc('alterar_funcao_equipe', {
+      p_estabelecimento_id: loja.id,
+      p_usuario_id: usuarioId,
+      p_funcao: novaFuncao,
+    })
+
+    if (error) {
+      setErro(error.message || 'Não foi possível alterar a função.')
+      return
+    }
+
+    setMensagem('Função atualizada.')
+    await carregarEquipe(loja.id)
+  }
+
+  async function remover(usuarioId) {
+    if (!loja?.id) return
+    if (!window.confirm('Remover o acesso deste funcionário desta unidade?')) return
+
+    setErro('')
+    setMensagem('')
+
+    const { error } = await supabase.rpc('remover_membro_equipe', {
+      p_estabelecimento_id: loja.id,
+      p_usuario_id: usuarioId,
+    })
+
+    if (error) {
+      setErro(error.message || 'Não foi possível remover este acesso.')
+      return
+    }
+
+    setMensagem('Acesso removido.')
+    await carregarEquipe(loja.id)
+  }
+
+  if (carregando) return <TelaCentral texto="Carregando equipe..." />
+  if (!loja) return <TelaCentral texto={erro || 'Não foi possível abrir a equipe.'} erro />
+
+  const nomeUnidade =
+    loja.nome_unidade ||
+    (loja.tipo_unidade === 'matriz' ? 'Matriz' : loja.nome)
+
+  return (
+    <div className="painel-food">
+      <NavegacaoPainel loja={loja} ativo="equipe" />
+
+      <main className="conteudo-painel">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+            marginBottom: 18,
+            padding: '20px 22px',
+            border: '1px solid #20354d',
+            borderRadius: 18,
+            background: 'linear-gradient(145deg,#0e1f32,#091726)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+            <div
+              style={{
+                width: 46,
+                height: 46,
+                display: 'grid',
+                placeItems: 'center',
+                borderRadius: 14,
+                background: '#102c4f',
+                color: '#75a9ff',
+              }}
+            >
+              <Users size={22} />
+            </div>
+
+            <div>
+              <span
+                style={{
+                  color: '#6e9fff',
+                  fontSize: '.65rem',
+                  fontWeight: 950,
+                  letterSpacing: '.08em',
+                }}
+              >
+                EQUIPE DA UNIDADE
+              </span>
+              <h2 style={{ margin: '3px 0 4px', color: '#f4f8ff' }}>
+                {nomeUnidade}
+              </h2>
+              <p style={{ margin: 0, color: '#8192aa', fontSize: '.82rem' }}>
+                Convide pessoas sem compartilhar sua senha.
+              </p>
+            </div>
+          </div>
+
+          <div
+            style={{
+              padding: '7px 10px',
+              border: '1px solid rgba(16,185,129,.28)',
+              borderRadius: 999,
+              background: 'rgba(6,78,59,.16)',
+              color: '#6ee7b7',
+              fontSize: '.68rem',
+              fontWeight: 900,
+            }}
+          >
+            {membros.length} {membros.length === 1 ? 'ACESSO' : 'ACESSOS'}
+          </div>
+        </div>
+
+        <section
+          style={{
+            marginBottom: 18,
+            padding: 18,
+            border: '1px solid #20354d',
+            borderRadius: 17,
+            background: '#0c1b2c',
+          }}
+        >
+          <div style={{ marginBottom: 14 }}>
+            <span
+              style={{
+                color: '#6e9fff',
+                fontSize: '.63rem',
+                fontWeight: 950,
+                letterSpacing: '.08em',
+              }}
+            >
+              NOVO ACESSO
+            </span>
+            <h3 style={{ margin: '5px 0 4px', color: '#fff' }}>
+              Convidar funcionário
+            </h3>
+            <p style={{ margin: 0, color: '#8192aa', fontSize: '.78rem' }}>
+              Digite o e-mail e o KODVEXA envia o link de acesso automaticamente.
+            </p>
+          </div>
+
+          <form
+            onSubmit={adicionar}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(220px,1fr) 180px auto',
+              gap: 10,
+              alignItems: 'end',
+            }}
+          >
+            <label
+              style={{
+                display: 'grid',
+                gap: 6,
+                color: '#9eb0c7',
+                fontSize: '.72rem',
+                fontWeight: 850,
+              }}
+            >
+              E-mail do funcionário
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="funcionario@email.com"
+                required
+                style={{
+                  minHeight: 44,
+                  padding: '0 12px',
+                  border: '1px solid #29405b',
+                  borderRadius: 11,
+                  outline: 'none',
+                  background: '#091522',
+                  color: '#edf5ff',
+                }}
+              />
+            </label>
+
+            <label
+              style={{
+                display: 'grid',
+                gap: 6,
+                color: '#9eb0c7',
+                fontSize: '.72rem',
+                fontWeight: 850,
+              }}
+            >
+              Função
+              <select
+                value={funcao}
+                onChange={(e) => setFuncao(e.target.value)}
+                style={{
+                  minHeight: 44,
+                  padding: '0 10px',
+                  border: '1px solid #29405b',
+                  borderRadius: 11,
+                  background: '#091522',
+                  color: '#edf5ff',
+                }}
+              >
+                <option value="gerente">Gerente</option>
+                <option value="atendente">Atendente</option>
+              </select>
+            </label>
+
+            <button
+              type="submit"
+              disabled={salvando}
+              style={{
+                minHeight: 44,
+                padding: '0 16px',
+                border: '1px solid #2d79ff',
+                borderRadius: 11,
+                background: '#1769ff',
+                color: '#fff',
+                fontWeight: 900,
+                cursor: salvando ? 'wait' : 'pointer',
+              }}
+            >
+              {salvando ? 'Enviando...' : 'Enviar convite'}
+            </button>
+          </form>
+
+          <div
+            style={{
+              marginTop: 13,
+              paddingTop: 13,
+              borderTop: '1px solid #1f344c',
+              color: '#7f94ae',
+              fontSize: '.72rem',
+              lineHeight: 1.45,
+            }}
+          >
+            <b style={{ color: '#d9e6f5' }}>Gerente:</b> Pedidos, Cardápio e Entregas.
+            {' · '}
+            <b style={{ color: '#d9e6f5' }}>Atendente:</b> operação completa de Pedidos.
+          </div>
+        </section>
+
+        {erro && <p className="erro-pedido">{erro}</p>}
+
+        {mensagem && (
+          <p
+            style={{
+              padding: 11,
+              border: '1px solid rgba(16,185,129,.3)',
+              borderRadius: 11,
+              background: 'rgba(6,78,59,.12)',
+              color: '#6ee7b7',
+              fontSize: '.78rem',
+            }}
+          >
+            {mensagem}
+          </p>
+        )}
+
+        {convites.length > 0 && (
+          <section
+            style={{
+              overflow: 'hidden',
+              marginBottom: 18,
+              border: '1px solid #20354d',
+              borderRadius: 17,
+              background: '#0c1b2c',
+            }}
+          >
+            <div
+              style={{
+                padding: '15px 17px',
+                borderBottom: '1px solid #20354d',
+                color: '#f4f8ff',
+                fontWeight: 900,
+              }}
+            >
+              Convites pendentes
+            </div>
+
+            {convites.map((convite) => (
+              <div
+                key={convite.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '44px minmax(0,1fr) 120px 110px 90px',
+                  gap: 10,
+                  alignItems: 'center',
+                  padding: '13px 16px',
+                  borderBottom: '1px solid #1c3046',
+                }}
+              >
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    display: 'grid',
+                    placeItems: 'center',
+                    borderRadius: 11,
+                    background: 'rgba(245,158,11,.10)',
+                    color: '#fbbf24',
+                  }}
+                >
+                  <Bell size={17} />
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  <strong
+                    style={{
+                      display: 'block',
+                      overflow: 'hidden',
+                      color: '#edf5ff',
+                      fontSize: '.82rem',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {convite.email}
+                  </strong>
+                  <small style={{ color: '#9a7b42', fontSize: '.67rem' }}>
+                    Aguardando aceite
+                  </small>
+                </div>
+
+                <div
+                  style={{
+                    color: '#a9bdd6',
+                    fontSize: '.7rem',
+                    fontWeight: 850,
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {convite.funcao}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={processandoConviteId === convite.id}
+                  onClick={() => reenviarConvite(convite)}
+                  style={{
+                    minHeight: 36,
+                    border: '1px solid #315b91',
+                    borderRadius: 9,
+                    background: '#10233d',
+                    color: '#a9c8f7',
+                    fontWeight: 850,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reenviar
+                </button>
+
+                <button
+                  type="button"
+                  disabled={processandoConviteId === convite.id}
+                  onClick={() => cancelarConvite(convite.id)}
+                  style={{
+                    minHeight: 36,
+                    border: '1px solid rgba(239,68,68,.28)',
+                    borderRadius: 9,
+                    background: 'rgba(127,29,29,.13)',
+                    color: '#f6a7a7',
+                    fontWeight: 850,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <section
+          style={{
+            overflow: 'hidden',
+            border: '1px solid #20354d',
+            borderRadius: 17,
+            background: '#0c1b2c',
+          }}
+        >
+          <div
+            style={{
+              padding: '15px 17px',
+              borderBottom: '1px solid #20354d',
+              color: '#f4f8ff',
+              fontWeight: 900,
+            }}
+          >
+            Acessos desta unidade
+          </div>
+
+          {!membros.length && (
+            <div style={{ padding: 28, color: '#8192aa', textAlign: 'center' }}>
+              Nenhum acesso encontrado.
+            </div>
+          )}
+
+          {membros.map((membro) => {
+            const ehDono = membro.funcao === 'dono'
+
+            return (
+              <div
+                key={membro.usuario_id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '44px minmax(0,1fr) 170px 90px',
+                  gap: 12,
+                  alignItems: 'center',
+                  padding: '14px 16px',
+                  borderBottom: '1px solid #1c3046',
+                }}
+              >
+                <div
+                  style={{
+                    width: 42,
+                    height: 42,
+                    display: 'grid',
+                    placeItems: 'center',
+                    borderRadius: 12,
+                    background: ehDono ? 'rgba(45,121,255,.14)' : '#10243a',
+                    color: ehDono ? '#75a9ff' : '#9db4cf',
+                  }}
+                >
+                  {ehDono ? <ShieldCheck size={19} /> : <Users size={18} />}
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  <strong
+                    style={{
+                      display: 'block',
+                      overflow: 'hidden',
+                      color: '#edf5ff',
+                      fontSize: '.84rem',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {membro.email}
+                  </strong>
+                  <small style={{ color: '#7890ad', fontSize: '.68rem' }}>
+                    {ehDono ? 'Proprietário da unidade' : 'Acesso individual'}
+                  </small>
+                </div>
+
+                {ehDono ? (
+                  <div
+                    style={{
+                      minHeight: 38,
+                      display: 'grid',
+                      placeItems: 'center',
+                      border: '1px solid #315b91',
+                      borderRadius: 10,
+                      background: '#10233d',
+                      color: '#7eb0ff',
+                      fontSize: '.7rem',
+                      fontWeight: 900,
+                    }}
+                  >
+                    DONO
+                  </div>
+                ) : (
+                  <select
+                    value={membro.funcao}
+                    onChange={(e) => alterarFuncao(membro.usuario_id, e.target.value)}
+                    style={{
+                      minHeight: 38,
+                      padding: '0 9px',
+                      border: '1px solid #29405b',
+                      borderRadius: 10,
+                      background: '#091522',
+                      color: '#edf5ff',
+                      fontSize: '.72rem',
+                      fontWeight: 800,
+                    }}
+                  >
+                    <option value="gerente">Gerente</option>
+                    <option value="atendente">Atendente</option>
+                  </select>
+                )}
+
+                <button
+                  type="button"
+                  disabled={ehDono}
+                  onClick={() => remover(membro.usuario_id)}
+                  style={{
+                    minHeight: 38,
+                    border: '1px solid rgba(239,68,68,.28)',
+                    borderRadius: 10,
+                    background: ehDono ? '#102034' : 'rgba(127,29,29,.13)',
+                    color: ehDono ? '#52677f' : '#f6a7a7',
+                    fontWeight: 850,
+                    cursor: ehDono ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Remover
+                </button>
+              </div>
+            )
+          })}
+        </section>
+      </main>
+    </div>
+  )
+}
+
+function PainelUnidades({ sessao }) {
+  const [loja, setLoja] = useState(null)
+  const [unidades, setUnidades] = useState([])
+  const [carregando, setCarregando] = useState(true)
+  const [erro, setErro] = useState('')
+  const [salvandoId, setSalvandoId] = useState('')
+  const [excluindoId, setExcluindoId] = useState('')
+  const [sincronizandoId, setSincronizandoId] = useState('')
+
+  async function carregarUnidades() {
+    setCarregando(true)
+    setErro('')
+
+    const { data: vinculos, error } = await supabase
+      .from('estabelecimento_usuarios')
+      .select('estabelecimento_id, funcao, estabelecimentos(*)')
+      .eq('usuario_id', sessao.user.id)
+
+    if (error) {
+      setErro(error.message || 'Não foi possível carregar as unidades.')
+      setCarregando(false)
+      return
+    }
+
+    const lista = (vinculos || [])
+      .map((item) => ({ ...item.estabelecimentos, funcao: item.funcao }))
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (a.tipo_unidade === 'matriz' && b.tipo_unidade !== 'matriz') return -1
+        if (a.tipo_unidade !== 'matriz' && b.tipo_unidade === 'matriz') return 1
+        return String(a.nome_unidade || a.nome || '').localeCompare(String(b.nome_unidade || b.nome || ''))
+      })
+
+    setUnidades(lista)
+
+    const unidadeAtualId = localStorage.getItem('kodvexa_unidade_atual')
+    const atual = lista.find((u) => u.id === unidadeAtualId)
+      || lista.find((u) => u.tipo_unidade === 'matriz')
+      || lista[0]
+      || null
+
+    setLoja(atual)
+    setCarregando(false)
+  }
+
+  useEffect(() => {
+    carregarUnidades()
+  }, [sessao.user.id])
+
+  function usarUnidade(id) {
+    localStorage.setItem('kodvexa_unidade_atual', id)
+    window.location.href = '/painel'
+  }
+
+  function editarUnidade(id) {
+    localStorage.setItem('kodvexa_unidade_atual', id)
+    window.location.href = '/painel/configuracoes'
+  }
+
+  async function alternarUnidade(unidade) {
+    if (unidade.tipo_unidade === 'matriz') return
+
+    const novoStatus = !Boolean(unidade.unidade_ativa)
+    setSalvandoId(unidade.id)
+    setErro('')
+
+    const { error } = await supabase
+      .from('estabelecimentos')
+      .update({ unidade_ativa: novoStatus })
+      .eq('id', unidade.id)
+
+    if (error) {
+      setErro(error.message || 'Não foi possível alterar o status da unidade.')
+      setSalvandoId('')
+      return
+    }
+
+    if (!novoStatus && localStorage.getItem('kodvexa_unidade_atual') === unidade.id) {
+      const matriz = unidades.find((item) => item.tipo_unidade === 'matriz')
+      if (matriz?.id) localStorage.setItem('kodvexa_unidade_atual', matriz.id)
+    }
+
+    await carregarUnidades()
+    setSalvandoId('')
+  }
+
+  async function sincronizarCardapio(unidade) {
+    if (!unidade?.id || unidade.tipo_unidade !== 'filial') return
+
+    setSincronizandoId(unidade.id)
+    setErro('')
+
+    const matrizId =
+      unidade.matriz_id ||
+      unidades.find((item) => item.tipo_unidade === 'matriz')?.id
+
+    if (!matrizId) {
+      setErro('Não foi possível localizar a Matriz desta filial.')
+      setSincronizandoId('')
+      return
+    }
+
+    const { error } = await supabase.rpc('sincronizar_cardapio_filial', {
+      p_matriz_id: matrizId,
+      p_filial_id: unidade.id,
+    })
+
+    setSincronizandoId('')
+
+    if (error) {
+      setErro(error.message || 'Não foi possível sincronizar o cardápio.')
+      return
+    }
+
+    window.alert(`Cardápio de ${unidade.nome_unidade || 'filial'} sincronizado com sucesso.`)
+  }
+
+  async function excluirFilial(unidade) {
+    if (!unidade?.id || unidade.tipo_unidade !== 'filial') return
+
+    const nome = unidade.nome_unidade || unidade.nome || 'esta filial'
+
+    const confirmou = window.confirm(
+      `Excluir a filial "${nome}"?\n\n` +
+      'Os pedidos e o histórico serão preservados.\n' +
+      'A licença usada por esta filial NÃO poderá ser reutilizada em outra loja.'
+    )
+
+    if (!confirmou) return
+
+    setExcluindoId(unidade.id)
+    setErro('')
+
+    const { error } = await supabase.rpc('excluir_filial_seguro', {
+      p_filial_id: unidade.id,
+    })
+
+    setExcluindoId('')
+
+    if (error) {
+      setErro(error.message || 'Não foi possível excluir a filial.')
+      return
+    }
+
+    if (localStorage.getItem('kodvexa_unidade_atual') === unidade.id) {
+      const matriz = unidades.find((item) => item.tipo_unidade === 'matriz')
+      if (matriz?.id) {
+        localStorage.setItem('kodvexa_unidade_atual', matriz.id)
+      }
+    }
+
+    await carregarUnidades()
+  }
+
+  if (carregando) return <TelaCentral texto="Carregando unidades..." />
+
+  return (
+    <div className="painel-shell">
+      <NavegacaoPainel loja={loja} ativo="unidades" />
+      <main className="painel-conteudo painel-unidades">
+        <style>{`
+          .painel-shell:has(.painel-unidades) {
+            min-height: 100vh !important;
+            background: #07111f !important;
+          }
+
+          .painel-shell:has(.painel-unidades) {
+            display: block !important;
+            width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          .painel-unidades {
+            position: relative !important;
+            inset: auto !important;
+            transform: none !important;
+            width: calc(100vw - 226px) !important;
+            max-width: calc(100vw - 226px) !important;
+            min-width: 0 !important;
+            min-height: 100vh !important;
+            margin: 0 0 0 226px !important;
+            padding: 28px 30px 40px !important;
+            box-sizing: border-box !important;
+            overflow-x: hidden !important;
+            background:
+              radial-gradient(circle at 92% 0%, rgba(38,112,255,.10), transparent 28%),
+              linear-gradient(180deg, #081421 0%, #07111f 100%) !important;
+            color: #f4f8ff !important;
+          }
+
+          .painel-unidades *,
+          .painel-unidades *::before,
+          .painel-unidades *::after {
+            box-sizing: border-box;
+          }
+
+          .unidades-topo {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            margin: 0 0 20px;
+            padding: 22px 24px;
+            border: 1px solid #20354d;
+            border-radius: 18px;
+            background: linear-gradient(145deg, rgba(14,31,50,.96), rgba(9,23,38,.96));
+            box-shadow: 0 12px 30px rgba(0,0,0,.12);
+          }
+
+          .unidades-topo span {
+            display: block;
+            margin-bottom: 6px;
+            color: #6e9fff;
+            font-size: .68rem;
+            font-weight: 950;
+            letter-spacing: .1em;
+          }
+
+          .unidades-topo h1 {
+            margin: 0;
+            color: #f3f7ff;
+            font-size: 1.75rem;
+            line-height: 1.05;
+            letter-spacing: -.03em;
+          }
+
+          .unidades-topo p {
+            margin: 7px 0 0;
+            color: #8192aa;
+            font-size: .86rem;
+          }
+
+          .unidades-resumo {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin: 0 0 18px;
+          }
+
+          .unidades-resumo article {
+            min-width: 0;
+            padding: 16px 18px;
+            border: 1px solid #20354d;
+            border-radius: 16px;
+            background: linear-gradient(180deg, #0d1e30, #0a1929);
+          }
+
+          .unidades-resumo small {
+            display: block;
+            color: #7287a1;
+            font-size: .66rem;
+            font-weight: 900;
+            letter-spacing: .07em;
+          }
+
+          .unidades-resumo strong {
+            display: block;
+            margin-top: 5px;
+            color: #fff;
+            font-size: 1.45rem;
+          }
+
+          .unidades-grade {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+            gap: 14px;
+          }
+
+          .unidade-card {
+            position: relative;
+            min-width: 0;
+            overflow: hidden;
+            padding: 18px;
+            border: 1px solid #223750;
+            border-radius: 18px;
+            background: linear-gradient(180deg, #0e1e31, #0a1726);
+            box-shadow: 0 14px 28px rgba(0,0,0,.12);
+          }
+
+          .unidade-card.atual {
+            border-color: #2d79ff;
+            box-shadow: 0 0 0 1px rgba(45,121,255,.22), 0 18px 34px rgba(0,0,0,.16);
+          }
+
+          .unidade-card.desativada { opacity: .62; }
+
+          .unidade-card__topo {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: flex-start;
+          }
+
+          .unidade-card__icone {
+            width: 44px;
+            height: 44px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 44px;
+            border-radius: 13px;
+            background: #102c4f;
+            color: #75a9ff;
+          }
+
+          .unidade-card__titulo {
+            display: flex;
+            gap: 12px;
+            min-width: 0;
+          }
+
+          .unidade-card__titulo > div:last-child { min-width: 0; }
+
+          .unidade-card__titulo h3 {
+            margin: 0;
+            overflow: hidden;
+            color: #f5f8ff;
+            font-size: 1.04rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .unidade-card__titulo p {
+            margin: 5px 0 0;
+            color: #7f91a9;
+            font-size: .76rem;
+          }
+
+          .unidade-selo {
+            flex: 0 0 auto;
+            padding: 5px 8px;
+            border-radius: 999px;
+            background: rgba(54,211,153,.1);
+            color: #60dfa9;
+            font-size: .62rem;
+            font-weight: 950;
+            white-space: nowrap;
+          }
+
+          .unidade-selo.off {
+            background: rgba(248,113,113,.1);
+            color: #f59b9b;
+          }
+
+          .unidade-card__dados {
+            display: grid;
+            gap: 8px;
+            margin: 17px 0;
+            padding: 14px 0;
+            border-top: 1px solid #1d3045;
+            border-bottom: 1px solid #1d3045;
+          }
+
+          .unidade-card__dados span {
+            display: grid;
+            grid-template-columns: 18px minmax(0, 1fr);
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            color: #9aabc0;
+            font-size: .76rem;
+          }
+
+          .unidade-card__dados b {
+            min-width: 0;
+            overflow: hidden;
+            color: #dbe6f5;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .unidade-card__acoes {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+          }
+
+          .unidade-card__acoes button {
+            min-width: 0;
+            min-height: 40px;
+            padding: 0 14px;
+            border: 1px solid #2b425d;
+            border-radius: 11px;
+            background: #102034;
+            color: #c8d7ea;
+            font: inherit;
+            font-size: .72rem;
+            font-weight: 900;
+            cursor: pointer;
+          }
+
+          .unidade-card__acoes button.primario-unidade {
+            border-color: #2d79ff;
+            background: linear-gradient(135deg, #1769ff, #287dff);
+            color: #fff;
+          }
+
+          .unidade-card__acoes button.perigo {
+            min-width: 72px;
+            padding: 0 11px;
+            color: #f6a7a7;
+          }
+
+          .unidade-card__acoes button:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+          }
+
+          .unidade-vazia {
+            width: 100%;
+            padding: 34px;
+            border: 1px dashed #29405c;
+            border-radius: 18px;
+            color: #8396ae;
+            text-align: center;
+          }
+
+          @media (max-width: 1180px) {
+            .unidades-grade { grid-template-columns: 1fr; }
+          }
+
+          @media (max-width: 720px) {
+            .painel-unidades {
+              width: 100vw !important;
+              max-width: 100vw !important;
+              margin-left: 0 !important;
+              padding: 86px 14px 28px !important;
+            }
+
+            .unidades-topo {
+              align-items: flex-start;
+              flex-direction: column;
+              padding: 18px;
+            }
+
+            .unidades-topo h1 { font-size: 1.45rem; }
+
+            .unidades-resumo {
+              grid-template-columns: 1fr 1fr;
+            }
+
+            .unidades-resumo article:first-child {
+              grid-column: 1 / -1;
+            }
+
+            .unidade-card {
+              padding: 15px;
+            }
+
+            .unidade-card__acoes {
+              grid-template-columns: 1fr 1fr;
+            }
+
+            .unidade-card__acoes button.perigo {
+              grid-column: 1 / -1;
+            }
+          }
+        `}</style>
+
+        <section className="unidades-topo">
+          <div>
+            <span>ESTRUTURA DA EMPRESA</span>
+            <h1>Gerenciar unidades</h1>
+            <p>Veja a matriz e todas as filiais em um só lugar.</p>
+          </div>
+        </section>
+
+        <section className="unidades-resumo">
+          <article><small>TOTAL DE UNIDADES</small><strong>{unidades.length}</strong></article>
+          <article><small>ATIVAS</small><strong>{unidades.filter((u) => u.unidade_ativa !== false).length}</strong></article>
+          <article><small>FILIAIS</small><strong>{unidades.filter((u) => u.tipo_unidade === 'filial').length}</strong></article>
+        </section>
+
+        {erro && <div className="erro-pedido" style={{ marginBottom: 14 }}>{erro}</div>}
+
+        <section className="unidades-grade">
+          {unidades.map((unidade) => {
+            const atual = localStorage.getItem('kodvexa_unidade_atual') === unidade.id
+            const ativa = unidade.unidade_ativa !== false
+            return (
+              <article key={unidade.id} className={`unidade-card ${atual ? 'atual' : ''} ${!ativa ? 'desativada' : ''}`}>
+                <div className="unidade-card__topo">
+                  <div className="unidade-card__titulo">
+                    <div className="unidade-card__icone"><Store size={21} /></div>
+                    <div>
+                      <h3>{unidade.nome_unidade || unidade.nome || 'Unidade'}</h3>
+                      <p>{unidade.tipo_unidade === 'matriz' ? 'Matriz principal' : 'Filial'}{atual ? ' • Unidade atual' : ''}</p>
+                    </div>
+                  </div>
+                  <span className={`unidade-selo ${ativa ? '' : 'off'}`}>{ativa ? 'ATIVA' : 'PAUSADA'}</span>
+                </div>
+
+                <div className="unidade-card__dados">
+                  <span><MapPin size={15} /><b>{[unidade.endereco, unidade.cidade, unidade.estado].filter(Boolean).join(' • ') || 'Endereço não informado'}</b></span>
+                  <span><Home size={15} /><b>{unidade.slug || 'Sem link configurado'}</b></span>
+                  <span><Bell size={15} /><b>{unidade.whatsapp || unidade.telefone || 'WhatsApp não informado'}</b></span>
+                </div>
+
+                <div className="unidade-card__acoes">
+                  <button type="button" className="primario-unidade" disabled={!ativa} onClick={() => usarUnidade(unidade.id)}>Usar unidade</button>
+
+                  {(unidade.tipo_unidade === 'filial' || unidade.matriz_id) && (
+                    <button
+                      type="button"
+                      disabled={sincronizandoId === unidade.id}
+                      onClick={() => sincronizarCardapio(unidade)}
+                      title="Trazer novidades da Matriz sem alterar preço ou disponibilidade desta filial"
+                      style={{
+                        borderColor: '#2d79ff',
+                        color: '#cfe1ff',
+                        background: 'rgba(45,121,255,.10)',
+                      }}
+                    >
+                      {sincronizandoId === unidade.id ? 'Sincronizando...' : 'Sincronizar cardápio'}
+                    </button>
+                  )}
+
+                  <button type="button" onClick={() => editarUnidade(unidade.id)}>Editar</button>
+                  <button
+                    type="button"
+                    className="perigo"
+                    disabled={unidade.tipo_unidade === 'matriz' || salvandoId === unidade.id}
+                    onClick={() => alternarUnidade(unidade)}
+                    title={unidade.tipo_unidade === 'matriz' ? 'A matriz não pode ser desativada' : ativa ? 'Pausar unidade' : 'Reativar unidade'}
+                  >
+                    {salvandoId === unidade.id ? '...' : ativa ? 'Pausar' : 'Ativar'}
+                  </button>
+
+                  {unidade.tipo_unidade === 'filial' && (
+                    <button
+                      type="button"
+                      disabled={excluindoId === unidade.id}
+                      onClick={() => excluirFilial(unidade)}
+                      title="Excluir filial preservando o histórico"
+                      style={{
+                        minHeight: 40,
+                        border: '1px solid rgba(239,68,68,.45)',
+                        borderRadius: 10,
+                        background: 'rgba(127,29,29,.16)',
+                        color: '#fca5a5',
+                        fontWeight: 900,
+                        cursor: excluindoId === unidade.id ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {excluindoId === unidade.id ? 'Excluindo...' : 'Excluir filial'}
+                    </button>
+                  )}
+                </div>
+              </article>
+            )
+          })}
+        </section>
+
+        {!unidades.length && <div className="unidade-vazia">Nenhuma unidade encontrada para este acesso.</div>}
+      </main>
+    </div>
   )
 }
 
@@ -3665,18 +4062,22 @@ function PainelCardapio({ sessao }) {
 
   async function carregarTudo() {
     setErro('')
-    const { data: vinculo, error: erroVinculo } = await supabase
-      .from('estabelecimento_usuarios')
-      .select('estabelecimento_id, estabelecimentos(*)')
-      .eq('usuario_id', sessao.user.id)
-      .maybeSingle()
-    if (erroVinculo || !vinculo) { setErro('Usuário sem estabelecimento vinculado.'); setCarregando(false); return }
-    setLoja(vinculo.estabelecimentos)
+    let contexto
+    try {
+      contexto = await obterUnidadeAtualCompleta()
+    } catch (e) {
+      setErro(e.message || 'Não foi possível carregar a unidade.')
+      setCarregando(false)
+      return
+    }
+    if (!contexto?.estabelecimento) { setErro('Usuário sem estabelecimento vinculado.'); setCarregando(false); return }
+    const estabelecimentoId = contexto.estabelecimento.id
+    setLoja(contexto.estabelecimento)
     const [{ data: cats, error: erroCats }, { data: prods, error: erroProds }, { data: grupos, error: erroGrupos }, { data: ops, error: erroOps }] = await Promise.all([
-      supabase.from('categorias').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
-      supabase.from('produtos').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
-      supabase.from('grupos_adicionais').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
-      supabase.from('adicionais').select('*').eq('estabelecimento_id', vinculo.estabelecimento_id).order('ordem'),
+      supabase.from('categorias').select('*').eq('estabelecimento_id', estabelecimentoId).order('ordem'),
+      supabase.from('produtos').select('*').eq('estabelecimento_id', estabelecimentoId).order('ordem'),
+      supabase.from('grupos_adicionais').select('*').eq('estabelecimento_id', estabelecimentoId).order('ordem'),
+      supabase.from('adicionais').select('*').eq('estabelecimento_id', estabelecimentoId).order('ordem'),
     ])
     const idsProdutos = (prods || []).map((p) => p.id)
     const { data: vinculos } = idsProdutos.length ? await supabase.from('produto_grupos_adicionais').select('*').in('produto_id', idsProdutos) : { data: [] }
@@ -3824,9 +4225,21 @@ function PainelCardapio({ sessao }) {
 
 
   async function alternarProduto(produto) {
-    setProdutos((lista) => lista.map((p) => p.id === produto.id ? { ...p, disponivel: !p.disponivel } : p))
-    const { error } = await supabase.from('produtos').update({ disponivel: !produto.disponivel }).eq('id', produto.id)
-    if (error) { setErro(error.message); carregarTudo() }
+    if (!loja?.id) return
+
+    const novoStatus = !produto.disponivel
+    setProdutos((lista) => lista.map((p) => p.id === produto.id ? { ...p, disponivel: novoStatus } : p))
+
+    const { error } = await supabase
+      .from('produtos')
+      .update({ disponivel: novoStatus })
+      .eq('id', produto.id)
+      .eq('estabelecimento_id', loja.id)
+
+    if (error) {
+      setErro(error.message)
+      carregarTudo()
+    }
   }
 
   if (carregando) return <TelaCentral texto="Carregando cardápio..." />
@@ -3848,7 +4261,25 @@ function PainelCardapio({ sessao }) {
                   <div className={`produto-painel ${!produto.disponivel ? 'pausado' : ''}`} key={produto.id}>
                     <div className="miniatura-produto">{produto.imagem_url ? <img src={produto.imagem_url} alt="" /> : <ShoppingBag />}</div>
                     <div className="produto-painel__texto"><strong>{produto.nome}</strong><span>{produto.descricao || 'Sem descrição'}</span><b>{dinheiro(produto.preco)}</b></div>
-                    <button className={`interruptor ${produto.disponivel ? 'ligado' : ''}`} onClick={() => alternarProduto(produto)} title="Ativar ou pausar"><i /></button>
+                    <button
+                      type="button"
+                      onClick={() => alternarProduto(produto)}
+                      title={produto.disponivel ? 'Marcar produto como esgotado' : 'Disponibilizar produto'}
+                      style={{
+                        minWidth: 118,
+                        minHeight: 38,
+                        padding: '0 12px',
+                        borderRadius: 10,
+                        border: produto.disponivel ? '1px solid rgba(16,185,129,.34)' : '1px solid rgba(239,68,68,.34)',
+                        background: produto.disponivel ? 'rgba(6,78,59,.18)' : 'rgba(127,29,29,.16)',
+                        color: produto.disponivel ? '#6ee7b7' : '#fca5a5',
+                        fontWeight: 900,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {produto.disponivel ? 'Disponível' : 'Esgotado'}
+                    </button>
                     <button className="editar-produto" onClick={() => editarProduto(produto)}>Editar</button>
                   </div>
                 ))}
@@ -4312,17 +4743,20 @@ function PainelEntregas({ sessao }) {
 
   useEffect(() => {
     async function carregar() {
-      const { data: vinculo, error } = await supabase
-        .from('estabelecimento_usuarios')
-        .select('estabelecimento_id, estabelecimentos(*)')
-        .eq('usuario_id', sessao.user.id)
-        .maybeSingle()
-      if (error || !vinculo?.estabelecimentos) {
+      let contexto
+      try {
+        contexto = await obterUnidadeAtualCompleta()
+      } catch (e) {
+        setErro(e.message || 'Não foi possível carregar a unidade.')
+        setCarregando(false)
+        return
+      }
+      if (!contexto?.estabelecimento) {
         setErro('Usuário sem estabelecimento vinculado.')
         setCarregando(false)
         return
       }
-      const e = vinculo.estabelecimentos
+      const e = contexto.estabelecimento
       setLoja(e)
       setForm({
         faz_entrega: e.faz_entrega ?? true,
@@ -4543,28 +4977,51 @@ function PainelConfiguracoes({ sessao }) {
   const [tipoVisual, setTipoVisual] = useState('capa')
   const [carregando, setCarregando] = useState(true)
   const [salvando, setSalvando] = useState(false)
+  const [alterandoStatusLoja, setAlterandoStatusLoja] = useState(false)
   const [mensagem, setMensagem] = useState('')
   const [erro, setErro] = useState('')
   const [modelosAbertos, setModelosAbertos] = useState(false)
+  const [abaConfig, setAbaConfig] = useState('informacoes')
+  const [horarios, setHorarios] = useState([
+    { dia_semana: 0, nome: 'Domingo', abre: '11:00', fecha: '22:00', fechado: true },
+    { dia_semana: 1, nome: 'Segunda-feira', abre: '11:00', fecha: '22:00', fechado: false },
+    { dia_semana: 2, nome: 'Terça-feira', abre: '11:00', fecha: '22:00', fechado: false },
+    { dia_semana: 3, nome: 'Quarta-feira', abre: '11:00', fecha: '22:00', fechado: false },
+    { dia_semana: 4, nome: 'Quinta-feira', abre: '11:00', fecha: '22:00', fechado: false },
+    { dia_semana: 5, nome: 'Sexta-feira', abre: '11:00', fecha: '23:00', fechado: false },
+    { dia_semana: 6, nome: 'Sábado', abre: '11:00', fecha: '23:00', fechado: false },
+  ])
+  const [salvandoHorarios, setSalvandoHorarios] = useState(false)
+  const [mensagemHorarios, setMensagemHorarios] = useState('')
+  const [erroHorarios, setErroHorarios] = useState('')
 
   useEffect(() => {
     async function carregarLoja() {
-      const { data: vinculo, error } = await supabase
-        .from('estabelecimento_usuarios')
-        .select('estabelecimento_id, estabelecimentos(*)')
-        .eq('usuario_id', sessao.user.id)
-        .maybeSingle()
+      let contexto
+      try {
+        contexto = await obterUnidadeAtualCompleta()
+      } catch (e) {
+        setErro(e.message || 'Não foi possível carregar a unidade.')
+        setCarregando(false)
+        return
+      }
 
-      if (error || !vinculo?.estabelecimentos) {
+      if (!contexto?.estabelecimento) {
         setErro('Usuário sem estabelecimento vinculado.')
         setCarregando(false)
         return
       }
 
-      const estabelecimento = vinculo.estabelecimentos
+      const estabelecimento = contexto.estabelecimento
       setLoja(estabelecimento)
       setForm({
         nome: estabelecimento.nome || '',
+        nome_unidade: estabelecimento.nome_unidade || (estabelecimento.tipo_unidade === 'matriz' ? 'Matriz' : ''),
+        endereco: estabelecimento.endereco || '',
+        cidade: estabelecimento.cidade || '',
+        estado: estabelecimento.estado || '',
+        cep: estabelecimento.cep || '',
+        whatsapp: estabelecimento.whatsapp || estabelecimento.telefone || '',
         descricao: estabelecimento.descricao || '',
         cor_principal: estabelecimento.cor_principal || '#0b5cff',
         modelo_visual: estabelecimento.modelo_visual || 'kodvexa',
@@ -4576,6 +5033,37 @@ function PainelConfiguracoes({ sessao }) {
       setPreviewCapa(estabelecimento.capa_url || '')
       setPreviewGif(estabelecimento.fundo_gif_url || '')
       setTipoVisual(estabelecimento.fundo_gif_url && !estabelecimento.capa_url ? 'gif' : 'capa')
+
+      const { data: horariosSalvos, error: erroHorariosBanco } = await supabase
+        .from('horarios_funcionamento')
+        .select('dia_semana, abre, fecha, fechado')
+        .eq('estabelecimento_id', estabelecimento.id)
+        .order('dia_semana')
+
+      if (!erroHorariosBanco && horariosSalvos?.length) {
+        const nomesDias = {
+          0: 'Domingo',
+          1: 'Segunda-feira',
+          2: 'Terça-feira',
+          3: 'Quarta-feira',
+          4: 'Quinta-feira',
+          5: 'Sexta-feira',
+          6: 'Sábado',
+        }
+
+        const base = [0, 1, 2, 3, 4, 5, 6].map((dia) => {
+          const salvo = horariosSalvos.find((item) => Number(item.dia_semana) === dia)
+          return {
+            dia_semana: dia,
+            nome: nomesDias[dia],
+            abre: String(salvo?.abre || '11:00').slice(0, 5),
+            fecha: String(salvo?.fecha || '22:00').slice(0, 5),
+            fechado: salvo ? Boolean(salvo.fechado) : dia === 0,
+          }
+        })
+        setHorarios(base)
+      }
+
       setCarregando(false)
     }
     carregarLoja()
@@ -4584,6 +5072,64 @@ function PainelConfiguracoes({ sessao }) {
   function alterar(campo, valor) {
     setForm((atual) => ({ ...atual, [campo]: valor }))
     setMensagem('')
+  }
+
+  function alterarHorario(diaSemana, campo, valor) {
+    setHorarios((atual) =>
+      atual.map((dia) =>
+        dia.dia_semana === diaSemana ? { ...dia, [campo]: valor } : dia
+      )
+    )
+    setMensagemHorarios('')
+    setErroHorarios('')
+  }
+
+  async function salvarHorarios() {
+    if (!loja?.id) return
+
+    const invalido = horarios.some((dia) =>
+      !dia.fechado && (!dia.abre || !dia.fecha)
+    )
+
+    if (invalido) {
+      setErroHorarios('Preencha o horário de abertura e fechamento dos dias abertos.')
+      return
+    }
+
+    setSalvandoHorarios(true)
+    setMensagemHorarios('')
+    setErroHorarios('')
+
+    const { error: erroExcluir } = await supabase
+      .from('horarios_funcionamento')
+      .delete()
+      .eq('estabelecimento_id', loja.id)
+
+    if (erroExcluir) {
+      setErroHorarios(erroExcluir.message || 'Não foi possível atualizar os horários.')
+      setSalvandoHorarios(false)
+      return
+    }
+
+    const linhas = horarios.map((dia) => ({
+      estabelecimento_id: loja.id,
+      dia_semana: dia.dia_semana,
+      abre: dia.fechado ? null : dia.abre,
+      fecha: dia.fechado ? null : dia.fecha,
+      fechado: dia.fechado,
+    }))
+
+    const { error: erroInserir } = await supabase
+      .from('horarios_funcionamento')
+      .insert(linhas)
+
+    if (erroInserir) {
+      setErroHorarios(erroInserir.message || 'Não foi possível salvar os horários.')
+    } else {
+      setMensagemHorarios(`Horários de ${form.nome_unidade || 'esta unidade'} salvos com sucesso.`)
+    }
+
+    setSalvandoHorarios(false)
   }
 
   function escolherLogo(evento) {
@@ -4643,6 +5189,38 @@ function PainelConfiguracoes({ sessao }) {
     setErro('')
   }
 
+  async function alternarRecebimentoPedidos() {
+    if (!loja?.id || alterandoStatusLoja) return
+
+    const novoStatus = !form.aberto
+
+    setAlterandoStatusLoja(true)
+    setErro('')
+    setMensagem('')
+
+    const { data, error } = await supabase
+      .from('estabelecimentos')
+      .update({ aberto: novoStatus })
+      .eq('id', loja.id)
+      .select()
+      .single()
+
+    setAlterandoStatusLoja(false)
+
+    if (error) {
+      setErro(error.message || 'Não foi possível alterar o status da unidade.')
+      return
+    }
+
+    setLoja(data)
+    setForm((atual) => ({ ...atual, aberto: Boolean(data.aberto) }))
+    setMensagem(
+      data.aberto
+        ? `Pedidos reativados em ${form.nome_unidade || 'esta unidade'}.`
+        : `Pedidos pausados em ${form.nome_unidade || 'esta unidade'}.`
+    )
+  }
+
   async function salvar(evento) {
     evento.preventDefault()
     setErro('')
@@ -4650,8 +5228,8 @@ function PainelConfiguracoes({ sessao }) {
 
     const taxa = Number(String(form.taxa_entrega_base).replace(',', '.'))
     const tempo = Number(form.tempo_medio_min)
-    if (!form.nome.trim() || !Number.isFinite(taxa) || taxa < 0 || !Number.isFinite(tempo) || tempo < 1) {
-      setErro('Preencha nome, tempo e taxa de entrega corretamente.')
+    if (!form.nome.trim() || !form.nome_unidade.trim() || !Number.isFinite(taxa) || taxa < 0 || !Number.isFinite(tempo) || tempo < 1) {
+      setErro('Preencha nome da loja, nome da unidade, tempo e taxa de entrega corretamente.')
       return
     }
 
@@ -4708,6 +5286,12 @@ function PainelConfiguracoes({ sessao }) {
 
     const dados = {
       nome: form.nome.trim(),
+      nome_unidade: form.nome_unidade.trim(),
+      endereco: form.endereco.trim() || null,
+      cidade: form.cidade.trim() || null,
+      estado: form.estado.trim().toUpperCase() || null,
+      cep: form.cep.trim() || null,
+      whatsapp: form.whatsapp.trim() || null,
       descricao: form.descricao.trim() || null,
       tempo_medio_min: tempo,
       taxa_entrega_base: taxa,
@@ -4755,6 +5339,98 @@ function PainelConfiguracoes({ sessao }) {
         <style>{`
           .config-pro {
             gap: 22px !important;
+          }
+
+          .unidade-config-pro {
+            grid-column: 1 / -1;
+          }
+
+          .unidade-config-pro__selo {
+            display: grid;
+            grid-template-columns: 38px minmax(0,1fr) auto;
+            align-items: center;
+            gap: 12px;
+            padding: 13px 14px;
+            border: 1px solid #2b4564;
+            border-radius: 15px;
+            background: #0b1828;
+            color: #7daeff;
+          }
+
+          .unidade-config-pro__selo > div {
+            display: grid;
+            gap: 2px;
+          }
+
+          .unidade-config-pro__selo small {
+            color: #7890ad;
+            font-size: .62rem;
+            font-weight: 900;
+            letter-spacing: .08em;
+          }
+
+          .unidade-config-pro__selo strong {
+            color: #eef6ff;
+            font-size: .92rem;
+          }
+
+          .unidade-config-pro__selo > span {
+            padding: 6px 9px;
+            border: 1px solid #315b91;
+            border-radius: 999px;
+            background: #10233d;
+            color: #7eb0ff;
+            font-size: .62rem;
+            font-weight: 900;
+          }
+
+          .unidade-config-pro__grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0,1fr));
+            gap: 13px;
+          }
+
+          .unidade-config-pro__grid label {
+            display: grid;
+            gap: 7px;
+            color: #8fa5bf;
+            font-size: .72rem;
+            font-weight: 850;
+          }
+
+          .unidade-config-pro__grid input {
+            width: 100%;
+            min-height: 45px;
+            padding: 0 13px;
+            border: 1px solid #29405b;
+            border-radius: 12px;
+            outline: none;
+            background: #091522;
+            color: #edf5ff;
+            font: inherit;
+          }
+
+          .unidade-config-pro__grid input:focus {
+            border-color: #4382ff;
+            box-shadow: 0 0 0 3px rgba(67,130,255,.10);
+          }
+
+          .unidade-config-pro__largo {
+            grid-column: 1 / -1;
+          }
+
+          .unidade-config-pro__aviso {
+            display: block;
+            color: #7f94ae;
+            font-size: .7rem;
+            line-height: 1.45;
+          }
+
+          @media (max-width: 720px) {
+            .unidade-config-pro__grid { grid-template-columns: 1fr; }
+            .unidade-config-pro__largo { grid-column: auto; }
+            .unidade-config-pro__selo { grid-template-columns: 34px minmax(0,1fr); }
+            .unidade-config-pro__selo > span { grid-column: 1 / -1; width: max-content; }
           }
 
           .config-pro__titulo {
@@ -5016,6 +5692,117 @@ function PainelConfiguracoes({ sessao }) {
 
           .config-pro__campos textarea {
             min-height: 86px !important;
+          }
+
+          .operacao-status-mestre {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+            padding: 16px 17px;
+            border: 1px solid #29425f;
+            border-radius: 16px;
+            background:
+              linear-gradient(145deg, rgba(17,36,58,.96), rgba(9,23,38,.96));
+          }
+
+          .operacao-status-mestre.online {
+            border-color: rgba(16,185,129,.34);
+            box-shadow: inset 0 0 0 1px rgba(16,185,129,.05);
+          }
+
+          .operacao-status-mestre.pausado {
+            border-color: rgba(239,68,68,.34);
+            box-shadow: inset 0 0 0 1px rgba(239,68,68,.05);
+          }
+
+          .operacao-status-mestre__info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+          }
+
+          .operacao-status-mestre__icone {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 42px;
+            border-radius: 13px;
+            background: rgba(16,185,129,.12);
+            color: #55d8a5;
+          }
+
+          .operacao-status-mestre.pausado .operacao-status-mestre__icone {
+            background: rgba(239,68,68,.12);
+            color: #f78b8b;
+          }
+
+          .operacao-status-mestre__texto {
+            min-width: 0;
+          }
+
+          .operacao-status-mestre__texto small {
+            display: block;
+            margin-bottom: 3px;
+            color: #7f94ae;
+            font-size: .62rem;
+            font-weight: 900;
+            letter-spacing: .07em;
+          }
+
+          .operacao-status-mestre__texto strong {
+            display: block;
+            color: #f3f8ff;
+            font-size: .94rem;
+          }
+
+          .operacao-status-mestre__texto p {
+            margin: 4px 0 0;
+            color: #8fa5bf;
+            font-size: .72rem;
+            line-height: 1.4;
+          }
+
+          .operacao-status-mestre__botao {
+            min-height: 42px;
+            padding: 0 16px;
+            border: 1px solid rgba(239,68,68,.45);
+            border-radius: 12px;
+            background: rgba(127,29,29,.18);
+            color: #fca5a5;
+            font: inherit;
+            font-size: .74rem;
+            font-weight: 950;
+            cursor: pointer;
+            white-space: nowrap;
+          }
+
+          .operacao-status-mestre.online .operacao-status-mestre__botao:hover {
+            background: rgba(127,29,29,.28);
+          }
+
+          .operacao-status-mestre.pausado .operacao-status-mestre__botao {
+            border-color: rgba(16,185,129,.42);
+            background: rgba(6,78,59,.22);
+            color: #6ee7b7;
+          }
+
+          .operacao-status-mestre__botao:disabled {
+            opacity: .55;
+            cursor: wait;
+          }
+
+          @media (max-width: 650px) {
+            .operacao-status-mestre {
+              grid-template-columns: 1fr;
+            }
+
+            .operacao-status-mestre__botao {
+              width: 100%;
+            }
           }
 
           .operacao-pro__grid {
@@ -5961,6 +6748,432 @@ function PainelConfiguracoes({ sessao }) {
             color: #111827 !important;
           }
 
+          .config-abas {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 9px;
+            padding: 7px;
+            border: 1px solid #243b58;
+            border-radius: 17px;
+            background: rgba(8,20,33,.78);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+          }
+
+          .config-abas button {
+            min-height: 46px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex: 1;
+            padding: 0 16px;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            background: transparent;
+            color: #8299b5;
+            font: inherit;
+            font-size: .78rem;
+            font-weight: 900;
+            cursor: pointer;
+            transition: .18s ease;
+          }
+
+          .config-abas button:hover {
+            color: #dceaff;
+            background: #0d1d30;
+          }
+
+          .config-abas button.ativo {
+            border-color: #397cff;
+            background: linear-gradient(135deg, #0d58df, #2478ff);
+            color: #fff;
+            box-shadow: 0 8px 22px rgba(36,120,255,.22);
+          }
+
+          .config-abas button svg {
+            width: 17px;
+            height: 17px;
+          }
+
+          .config-horarios {
+            display: grid;
+            gap: 10px;
+          }
+
+          .config-horario-linha {
+            display: grid;
+            grid-template-columns: minmax(150px, 1fr) 132px 24px 132px 112px;
+            align-items: center;
+            gap: 10px;
+            min-height: 64px;
+            padding: 10px 12px;
+            border: 1px solid #223a55;
+            border-radius: 14px;
+            background: #0b1929;
+          }
+
+          .config-horario-dia {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+          }
+
+          .config-horario-dia__icone {
+            width: 34px;
+            height: 34px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 34px;
+            border-radius: 10px;
+            background: #102b49;
+            color: #75a9ff;
+          }
+
+          .config-horario-dia strong {
+            color: #edf5ff;
+            font-size: .82rem;
+          }
+
+          .config-horario-linha input[type="time"] {
+            width: 100%;
+            min-height: 42px;
+            padding: 0 10px;
+            border: 1px solid #29435f;
+            border-radius: 11px;
+            outline: none;
+            background: #091522;
+            color: #f4f8ff;
+            font: inherit;
+            font-size: .78rem;
+          }
+
+          .config-horario-linha input[type="time"]:disabled {
+            opacity: .35;
+          }
+
+          .config-horario-separador {
+            color: #627b99;
+            text-align: center;
+            font-size: .72rem;
+            font-weight: 900;
+          }
+
+          .config-horario-status {
+            min-height: 40px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 0 10px;
+            border: 1px solid #29435f;
+            border-radius: 11px;
+            background: #0d2034;
+            color: #a9bdd6;
+            cursor: pointer;
+            font-size: .72rem;
+            font-weight: 900;
+          }
+
+          .config-horario-status input {
+            accent-color: #2478ff;
+          }
+
+          .config-horarios-acoes {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid #223a55;
+          }
+
+          .config-horarios-acoes__msg {
+            min-width: 0;
+          }
+
+          .config-horarios-acoes__msg p {
+            margin: 0;
+            font-size: .75rem;
+          }
+
+          .config-horarios-acoes__msg .ok {
+            color: #6ee7b7;
+          }
+
+          .config-horarios-acoes__msg .erro {
+            color: #fda4af;
+          }
+
+          .config-horarios-salvar {
+            min-height: 44px;
+            padding: 0 18px;
+            border: 1px solid #3b80ff;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #1769ff, #287dff);
+            color: #fff;
+            font: inherit;
+            font-size: .76rem;
+            font-weight: 950;
+            cursor: pointer;
+          }
+
+          .config-horarios-salvar:disabled {
+            opacity: .55;
+            cursor: wait;
+          }
+
+          @media (max-width: 900px) {
+            .config-horario-linha {
+              grid-template-columns: minmax(140px, 1fr) 1fr 20px 1fr;
+            }
+
+            .config-horario-status {
+              grid-column: 1 / -1;
+            }
+          }
+
+          @media (max-width: 620px) {
+            .config-horario-linha {
+              grid-template-columns: 1fr 1fr;
+            }
+
+            .config-horario-dia,
+            .config-horario-status {
+              grid-column: 1 / -1;
+            }
+
+            .config-horario-separador {
+              display: none;
+            }
+
+            .config-horarios-acoes {
+              align-items: stretch;
+              flex-direction: column;
+            }
+
+            .config-horarios-salvar {
+              width: 100%;
+            }
+          }
+
+          .config-conteudo-aba {
+            grid-column: 1;
+            min-width: 0;
+          }
+
+          .config-conteudo-aba > .cartao-config {
+            margin: 0;
+          }
+
+          .config-unidade-resumo {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 14px;
+            padding: 16px 17px;
+            border: 1px solid #2b4c73;
+            border-left: 4px solid #2478ff;
+            border-radius: 16px;
+            background:
+              radial-gradient(circle at 12% 0%, rgba(36,120,255,.12), transparent 38%),
+              #0a1828;
+          }
+
+          .config-unidade-resumo__principal {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+          }
+
+          .config-unidade-resumo__icone {
+            width: 44px;
+            height: 44px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 44px;
+            border: 1px solid #3265a5;
+            border-radius: 13px;
+            background: #102a49;
+            color: #76aaff;
+          }
+
+          .config-unidade-resumo small {
+            display: block;
+            margin-bottom: 3px;
+            color: #7896bb;
+            font-size: .61rem;
+            font-weight: 950;
+            letter-spacing: .08em;
+          }
+
+          .config-unidade-resumo strong {
+            display: block;
+            overflow: hidden;
+            color: #eef6ff;
+            font-size: 1rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .config-unidade-resumo__tipo {
+            min-height: 27px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 10px;
+            border: 1px solid #2f609b;
+            border-radius: 999px;
+            background: #102641;
+            color: #73a9ff;
+            font-size: .61rem;
+            font-weight: 950;
+          }
+
+          .config-simples .titulo-bloco-config {
+            margin-bottom: 18px;
+          }
+
+          .config-simples .unidade-config-pro__grid {
+            gap: 15px;
+          }
+
+          .config-simples .unidade-config-pro__grid label {
+            gap: 8px;
+            color: #a7bad1;
+            font-size: .72rem;
+          }
+
+          .config-simples .unidade-config-pro__grid input,
+          .config-simples .config-pro__campos input,
+          .config-simples .config-pro__campos textarea {
+            border-color: #2a4564;
+            background: #081522;
+          }
+
+          @media (max-width: 900px) {
+            .config-abas {
+              overflow-x: auto;
+              justify-content: flex-start;
+            }
+
+            .config-abas button {
+              min-width: 140px;
+              flex: 0 0 auto;
+            }
+
+            .config-unidade-resumo {
+              align-items: flex-start;
+              flex-direction: column;
+            }
+          }
+
+          /* LAYOUT FINAL DAS CONFIGURAÇÕES */
+          .form-config {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) 380px !important;
+            gap: 16px 18px !important;
+            align-items: start !important;
+          }
+
+          .config-abas {
+            grid-column: 1 / -1 !important;
+            grid-row: 1 !important;
+            margin: 0 !important;
+          }
+
+          .config-conteudo-aba {
+            grid-column: 1 !important;
+            grid-row: 2 !important;
+            min-width: 0 !important;
+          }
+
+          .preview-config {
+            grid-column: 2 !important;
+            grid-row: 2 !important;
+            position: sticky !important;
+            top: 16px !important;
+            width: 100% !important;
+            max-width: 380px !important;
+            margin: 0 !important;
+            justify-self: end !important;
+          }
+
+          .mensagem-config,
+          .acoes-config {
+            grid-column: 1 / -1 !important;
+          }
+
+          .acoes-config {
+            display: flex !important;
+            justify-content: flex-end !important;
+            gap: 10px !important;
+            margin-top: 0 !important;
+          }
+
+          .config-unidade-resumo {
+            margin-bottom: 12px !important;
+            padding: 13px 15px !important;
+          }
+
+          .config-unidade-resumo__icone {
+            width: 38px !important;
+            height: 38px !important;
+            flex-basis: 38px !important;
+          }
+
+          .config-conteudo-aba > .cartao-config {
+            padding: 18px !important;
+          }
+
+          .config-simples .titulo-bloco-config {
+            margin-bottom: 14px !important;
+          }
+
+          .unidade-config-pro__grid {
+            grid-template-columns: minmax(0, 1.4fr) minmax(220px, .8fr) !important;
+            gap: 12px !important;
+          }
+
+          .unidade-config-pro__grid input {
+            min-height: 43px !important;
+          }
+
+          @media (max-width: 1180px) {
+            .form-config {
+              grid-template-columns: minmax(0, 1fr) 330px !important;
+            }
+            .preview-config {
+              max-width: 330px !important;
+            }
+          }
+
+          @media (max-width: 900px) {
+            .form-config {
+              grid-template-columns: 1fr !important;
+            }
+            .config-abas {
+              grid-column: 1 !important;
+              grid-row: auto !important;
+            }
+            .config-conteudo-aba {
+              grid-column: 1 !important;
+              grid-row: auto !important;
+            }
+            .preview-config {
+              grid-column: 1 !important;
+              grid-row: auto !important;
+              position: static !important;
+              max-width: 100% !important;
+              justify-self: stretch !important;
+            }
+            .unidade-config-pro__grid {
+              grid-template-columns: 1fr !important;
+            }
+          }
+
           @media (max-width: 900px) {
             .modelos-accordion__cabecalho {
               align-items: flex-start;
@@ -5982,7 +7195,130 @@ function PainelConfiguracoes({ sessao }) {
 
         `}</style>
         <form className="form-config" onSubmit={salvar}>
-          <section className="cartao-config identidade-config config-pro">
+          <div className="config-abas">
+            <button type="button" className={abaConfig === 'informacoes' ? 'ativo' : ''} onClick={() => setAbaConfig('informacoes')}>
+              <Store /> Informações
+            </button>
+            <button type="button" className={abaConfig === 'operacao' ? 'ativo' : ''} onClick={() => setAbaConfig('operacao')}>
+              <Clock3 /> Operação
+            </button>
+            <button type="button" className={abaConfig === 'horarios' ? 'ativo' : ''} onClick={() => setAbaConfig('horarios')}>
+              <Clock3 /> Horários
+            </button>
+            <button type="button" className={abaConfig === 'aparencia' ? 'ativo' : ''} onClick={() => setAbaConfig('aparencia')}>
+              <Sparkles /> Aparência
+            </button>
+          </div>
+
+          <div className="config-conteudo-aba">
+            <div className="config-unidade-resumo">
+              <div className="config-unidade-resumo__principal">
+                <div className="config-unidade-resumo__icone"><Store size={20} /></div>
+                <div>
+                  <small>VOCÊ ESTÁ EDITANDO A UNIDADE</small>
+                  <strong>{form.nome_unidade || (loja.tipo_unidade === 'matriz' ? 'Matriz' : 'Filial')}</strong>
+                </div>
+              </div>
+              <span className="config-unidade-resumo__tipo">{loja.tipo_unidade === 'matriz' ? 'MATRIZ' : 'FILIAL'}</span>
+            </div>
+
+            {abaConfig === 'informacoes' && (
+          <section className="cartao-config config-pro unidade-config-pro config-simples">
+            <div className="titulo-bloco-config config-pro__titulo">
+              <span>INFORMAÇÕES</span>
+              <h3>Dados da unidade</h3>
+              <p>Edite apenas os dados principais desta unidade.</p>
+            </div>
+
+            <div className="unidade-config-pro__grid">
+              <label>Nome da unidade
+                <input value={form.nome_unidade} onChange={(e) => alterar('nome_unidade', e.target.value)} placeholder="Ex.: Zona Norte" />
+              </label>
+              <label>WhatsApp da unidade
+                <input value={form.whatsapp} onChange={(e) => alterar('whatsapp', e.target.value)} placeholder="(51) 99999-9999" inputMode="tel" />
+              </label>
+              <label className="unidade-config-pro__largo">Endereço
+                <input value={form.endereco} onChange={(e) => alterar('endereco', e.target.value)} placeholder="Rua, avenida..." />
+              </label>
+              <label>Cidade
+                <input value={form.cidade} onChange={(e) => alterar('cidade', e.target.value)} placeholder="Porto Alegre" />
+              </label>
+              <label>Estado
+                <input value={form.estado} onChange={(e) => alterar('estado', e.target.value)} placeholder="RS" maxLength={2} />
+              </label>
+              <label>CEP
+                <input value={form.cep} onChange={(e) => alterar('cep', e.target.value)} placeholder="00000-000" inputMode="numeric" />
+              </label>
+            </div>
+
+            <small className="unidade-config-pro__aviso">As configurações de entrega continuam na aba <b>Entregas</b>.</small>
+          </section>
+            )}
+
+            {abaConfig === 'horarios' && (
+              <section className="cartao-config config-pro config-simples">
+                <div className="titulo-bloco-config config-pro__titulo">
+                  <span>HORÁRIOS</span>
+                  <h3>Funcionamento da unidade</h3>
+                  <p>Defina os horários exclusivos de {form.nome_unidade || 'esta unidade'}.</p>
+                </div>
+
+                <div className="config-horarios">
+                  {horarios.map((dia) => (
+                    <div className="config-horario-linha" key={dia.dia_semana}>
+                      <div className="config-horario-dia">
+                        <div className="config-horario-dia__icone"><Clock3 size={16} /></div>
+                        <strong>{dia.nome}</strong>
+                      </div>
+
+                      <input
+                        type="time"
+                        value={dia.abre}
+                        disabled={dia.fechado}
+                        onChange={(e) => alterarHorario(dia.dia_semana, 'abre', e.target.value)}
+                      />
+
+                      <span className="config-horario-separador">até</span>
+
+                      <input
+                        type="time"
+                        value={dia.fecha}
+                        disabled={dia.fechado}
+                        onChange={(e) => alterarHorario(dia.dia_semana, 'fecha', e.target.value)}
+                      />
+
+                      <label className="config-horario-status">
+                        <input
+                          type="checkbox"
+                          checked={!dia.fechado}
+                          onChange={(e) => alterarHorario(dia.dia_semana, 'fechado', !e.target.checked)}
+                        />
+                        {dia.fechado ? 'Fechado' : 'Aberto'}
+                      </label>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="config-horarios-acoes">
+                  <div className="config-horarios-acoes__msg">
+                    {erroHorarios && <p className="erro">{erroHorarios}</p>}
+                    {mensagemHorarios && <p className="ok">{mensagemHorarios}</p>}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="config-horarios-salvar"
+                    disabled={salvandoHorarios}
+                    onClick={salvarHorarios}
+                  >
+                    {salvandoHorarios ? 'Salvando...' : 'Salvar horários'}
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {abaConfig === 'aparencia' && (
+          <section className="cartao-config identidade-config config-pro config-simples">
             <div className="titulo-bloco-config config-pro__titulo">
               <span>APARÊNCIA</span>
               <h3>Identidade da loja</h3>
@@ -6198,23 +7534,47 @@ function PainelConfiguracoes({ sessao }) {
               </label>
             </div>
           </section>
+            )}
 
-          <section className="cartao-config operacao-config config-pro operacao-pro">
+            {abaConfig === 'operacao' && (
+          <section className="cartao-config operacao-config config-pro operacao-pro config-simples">
             <div className="titulo-bloco-config config-pro__titulo">
               <span>OPERAÇÃO</span>
               <h3>Entrega e funcionamento</h3>
               <p>Defina as informações que aparecem durante o pedido.</p>
             </div>
 
-            <div className="operacao-pro__grid">
-              <label className="operacao-pro__status">
-                <span>
-                  <strong>Status da loja</strong>
-                  <small>{form.aberto ? 'Clientes podem fazer pedidos agora.' : 'A loja aparece como fechada.'}</small>
-                </span>
-                <input type="checkbox" checked={form.aberto} onChange={(e) => alterar('aberto', e.target.checked)} />
-              </label>
+            <div className={`operacao-status-mestre ${form.aberto ? 'online' : 'pausado'}`}>
+              <div className="operacao-status-mestre__info">
+                <div className="operacao-status-mestre__icone">
+                  {form.aberto ? <CheckCircle2 size={20} /> : <X size={20} />}
+                </div>
+                <div className="operacao-status-mestre__texto">
+                  <small>STATUS DOS PEDIDOS</small>
+                  <strong>{form.aberto ? 'Recebendo pedidos' : 'Pedidos pausados'}</strong>
+                  <p>
+                    {form.aberto
+                      ? 'A unidade segue os horários cadastrados e recebe pedidos quando estiver dentro do expediente.'
+                      : 'O cardápio continua visível, mas os clientes não conseguem adicionar itens nem fazer pedidos.'}
+                  </p>
+                </div>
+              </div>
 
+              <button
+                type="button"
+                className="operacao-status-mestre__botao"
+                disabled={alterandoStatusLoja}
+                onClick={alternarRecebimentoPedidos}
+              >
+                {alterandoStatusLoja
+                  ? 'Atualizando...'
+                  : form.aberto
+                    ? 'Pausar pedidos'
+                    : 'Voltar a receber pedidos'}
+              </button>
+            </div>
+
+            <div className="operacao-pro__grid">
               <label className="operacao-pro__campo">
                 <span>Tempo médio</span>
                 <div><input type="number" min="1" value={form.tempo_medio_min} onChange={(e) => alterar('tempo_medio_min', e.target.value)} /><b>min</b></div>
@@ -6226,6 +7586,8 @@ function PainelConfiguracoes({ sessao }) {
               </label>
             </div>
           </section>
+            )}
+          </div>
 
           <aside className="preview-config" style={{ '--preview-cor': form.cor_principal || '#0b5cff' }}>
             <div className="preview-config__topo">
@@ -6298,6 +7660,7 @@ function PainelRestaurante({ sessao }) {
   const [pedidosChamando, setPedidosChamando] = useState([])
   const [alertasAtivos, setAlertasAtivos] = useState(() => localStorage.getItem('kodvexa_alertas_pedidos') === '1')
   const pedidosConhecidos = useRef(new Set())
+  const pedidosInicializados = useRef(false)
   const audioAlertaRef = useRef(null)
 
   function obterAudioAlerta() {
@@ -6416,12 +7779,14 @@ function PainelRestaurante({ sessao }) {
     }
 
     const lista = data || []
-    if (detectarNovos && pedidosConhecidos.current.size > 0) {
+
+    if (detectarNovos && pedidosInicializados.current) {
       const novos = lista.filter((pedido) => !pedidosConhecidos.current.has(pedido.id))
       novos.slice().reverse().forEach(registrarNovoPedido)
     }
 
     pedidosConhecidos.current = new Set(lista.map((pedido) => pedido.id))
+    pedidosInicializados.current = true
     setPedidos(lista)
   }
 
@@ -6483,30 +7848,41 @@ function PainelRestaurante({ sessao }) {
     let cancelado = false
 
     async function carregarPainel() {
-      const { data: vinculo, error: erroVinculo } = await supabase
-        .from('estabelecimento_usuarios')
-        .select('estabelecimento_id, estabelecimentos(*)')
-        .eq('usuario_id', sessao.user.id)
-        .maybeSingle()
+      let contexto
+      try {
+        contexto = await obterUnidadeAtualCompleta()
+      } catch (e) {
+        setErro(e.message || 'Não foi possível carregar a unidade.')
+        setCarregando(false)
+        return
+      }
 
-      if (erroVinculo || !vinculo) {
+      if (!contexto?.estabelecimento) {
         setErro('Este usuário ainda não está vinculado a um estabelecimento.')
         setCarregando(false)
         return
       }
 
+      const estabelecimentoId = contexto.estabelecimento.id
       if (cancelado) return
-      setLoja(vinculo.estabelecimentos)
-      await carregarPedidos(vinculo.estabelecimento_id, false)
+
+      // Cada unidade precisa ter seu próprio ponto de partida para detectar pedidos novos.
+      pedidosConhecidos.current = new Set()
+      pedidosInicializados.current = false
+      setPedidosChamando([])
+      pararSomContinuo()
+
+      setLoja(contexto.estabelecimento)
+      await carregarPedidos(estabelecimentoId, false)
 
       canal = supabase
-        .channel(`pedidos-${vinculo.estabelecimento_id}`)
+        .channel(`pedidos-${estabelecimentoId}`)
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'pedidos', filter: `estabelecimento_id=eq.${vinculo.estabelecimento_id}` },
+          { event: '*', schema: 'public', table: 'pedidos', filter: `estabelecimento_id=eq.${estabelecimentoId}` },
           (payload) => {
             if (payload.eventType === 'INSERT') registrarNovoPedido(payload.new)
-            carregarPedidos(vinculo.estabelecimento_id, false)
+            carregarPedidos(estabelecimentoId, false)
           }
         )
         .subscribe()
@@ -6514,7 +7890,7 @@ function PainelRestaurante({ sessao }) {
       // Plano B confiável: consulta pedidos a cada 3 segundos.
       // Assim o painel atualiza mesmo se o Realtime do Supabase não estiver habilitado para a tabela.
       intervalo = window.setInterval(() => {
-        carregarPedidos(vinculo.estabelecimento_id, true)
+        carregarPedidos(estabelecimentoId, true)
       }, 3000)
 
       setCarregando(false)
@@ -6565,25 +7941,39 @@ function PainelRestaurante({ sessao }) {
   }
 
   async function mudarStatus(pedido, status) {
+    if (!loja?.id || !pedido?.id) return
+
     const anterior = pedidos
-    setPedidos((lista) => lista.map((item) => item.id === pedido.id ? { ...item, status } : item))
-    const { error } = await supabase.from('pedidos').update({ status }).eq('id', pedido.id)
+    setPedidos((lista) =>
+      lista.map((item) => item.id === pedido.id ? { ...item, status } : item)
+    )
+
+    const { error } = await supabase.rpc('atualizar_status_pedido_equipe', {
+      p_pedido_id: pedido.id,
+      p_estabelecimento_id: loja.id,
+      p_status: status,
+    })
+
     if (error) {
       setPedidos(anterior)
-      setErro(error.message)
+      setErro(error.message || 'Não foi possível atualizar o pedido.')
       return
     }
 
-    // O alerta só para quando o dono realmente aceitar/confirmar o pedido.
+    // O alerta para quando o pedido sai de "recebido".
     if (status !== 'recebido') {
-      setPedidosChamando((atuais) => atuais.filter((item) => item.id !== pedido.id))
+      setPedidosChamando((atuais) =>
+        atuais.filter((item) => item.id !== pedido.id)
+      )
     }
 
     // Ao sair para entrega, o cliente recebe automaticamente o aviso pelo WhatsApp.
     if (status === 'saiu_entrega' && pedido.tipo_entrega === 'entrega') {
       const enviado = await enviarAvisoWhatsApp(pedido, 'saiu_entrega')
       if (!enviado) {
-        setErro('O pedido saiu para entrega, mas o aviso do WhatsApp não foi enviado. Confira a configuração da API.')
+        setErro(
+          'O pedido saiu para entrega, mas o aviso do WhatsApp não foi enviado. Confira a configuração da API.'
+        )
       }
     }
   }
@@ -7036,10 +8426,14 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Inicio />} />
         <Route path="/cardapio/:slug" element={<Cardapio />} />
+        <Route path="/painel/convite" element={<ConviteEquipe />} />
+        <Route path="/painel/cadastro" element={<CadastroFuncionario />} />
         <Route path="/painel" element={<LoginPainel />} />
         <Route path="/painel/cardapio" element={<LoginPainel pagina="cardapio" />} />
         <Route path="/painel/entregas" element={<LoginPainel pagina="entregas" />} />
         <Route path="/painel/configuracoes" element={<LoginPainel pagina="configuracoes" />} />
+        <Route path="/painel/unidades" element={<LoginPainel pagina="unidades" />} />
+        <Route path="/painel/equipe" element={<LoginPainel pagina="equipe" />} />
         <Route path="*" element={<TelaCentral texto="Página não encontrada." erro />} />
       </Routes>
     </BrowserRouter>
