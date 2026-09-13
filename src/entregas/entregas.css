@@ -1,0 +1,472 @@
+
+/* ============================================================
+   KODVEXA FOOD • ENTREGADOR MINIMAL
+   ============================================================ */
+
+body:has(.kv-entregador-min) {
+  margin: 0;
+  background: #07111f !important;
+}
+
+.kv-entregador-min {
+  --bg: #07111f;
+  --panel: #0d1a2a;
+  --panel2: #111f31;
+  --line: rgba(148,163,184,.15);
+  --text: #f8fafc;
+  --muted: #8ba0b9;
+  --blue: #2563eb;
+  --green: #10b981;
+
+  width: 100%;
+  max-width: 520px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 14px 12px 28px;
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.kv-entregador-min * {
+  box-sizing: border-box;
+}
+
+.kv-mini-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -14px -12px 12px;
+  padding: 12px;
+  background: rgba(7,17,31,.92);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+}
+
+.kv-mini-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kv-mini-brand > span {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #1d4ed8, #3b82f6);
+}
+
+.kv-mini-brand small {
+  display: block;
+  color: #79a6ed;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.kv-mini-brand strong {
+  display: block;
+  margin-top: 2px;
+  color: #fff;
+  font-size: 17px;
+}
+
+.kv-mini-refresh {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0c1928;
+  color: #dce8f7;
+}
+
+.kv-mini-loja {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: linear-gradient(135deg, rgba(37,99,235,.12), transparent 60%), var(--panel);
+}
+
+.kv-mini-loja small {
+  color: #7aa6e9;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.kv-mini-loja h1 {
+  margin: 3px 0 2px;
+  font-size: 20px;
+  color: #fff;
+  letter-spacing: -.03em;
+}
+
+.kv-mini-loja p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kv-mini-online {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(16,185,129,.12);
+  border: 1px solid rgba(16,185,129,.25);
+  color: #86efac;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.kv-mini-rota {
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.kv-mini-rota-cab {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.kv-mini-rota-cab small {
+  display: block;
+  color: #6f88a6;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .1em;
+}
+
+.kv-mini-rota-cab strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 15px;
+  color: #fff;
+}
+
+.kv-mini-rota-cab button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 11px;
+  border: 1px solid rgba(59,130,246,.22);
+  background: rgba(37,99,235,.10);
+  color: #bfdbfe;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kv-mini-rota .leaflet-container {
+  height: 230px !important;
+  border-radius: 13px;
+  overflow: hidden;
+}
+
+.kv-mini-rota-info {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.kv-mini-rota-info span {
+  flex: 1;
+  padding: 9px;
+  border-radius: 10px;
+  text-align: center;
+  background: #101e2f;
+  border: 1px solid var(--line);
+  color: #dce7f4;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kv-mini-map-msg,
+.kv-mini-map-erro {
+  padding: 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.kv-mini-map-msg {
+  background: #0f1d2e;
+  color: #9fb3ca;
+}
+
+.kv-mini-map-erro {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  background: rgba(127,29,29,.18);
+  color: #fecaca;
+}
+
+.kv-mini-map-erro button {
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-weight: 800;
+}
+
+.kv-mini-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  padding: 4px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #0b1726;
+}
+
+.kv-mini-tabs button {
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #8398b1;
+  padding: 9px 4px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.kv-mini-tabs button b {
+  margin-left: 3px;
+}
+
+.kv-mini-tabs button.ativo {
+  background: #2563eb;
+  color: #fff;
+}
+
+.kv-mini-lista {
+  display: grid;
+  gap: 10px;
+}
+
+.kv-mini-card {
+  position: relative;
+  overflow: hidden;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--panel);
+}
+
+.kv-mini-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: #3b82f6;
+}
+
+.kv-mini-card.em-rota::before {
+  background: #f59e0b;
+}
+
+.kv-mini-topo {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.kv-mini-numero {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(37,99,235,.13);
+  color: #93c5fd;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.kv-mini-identificacao small {
+  display: block;
+  color: #6f88a6;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .09em;
+}
+
+.kv-mini-identificacao strong {
+  display: block;
+  margin-top: 2px;
+  color: #fff;
+  font-size: 16px;
+}
+
+.kv-mini-status {
+  padding: 5px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.kv-mini-status.pronto {
+  color: #93c5fd;
+  background: rgba(37,99,235,.12);
+}
+
+.kv-mini-status.rota {
+  color: #fde68a;
+  background: rgba(245,158,11,.12);
+}
+
+.kv-mini-endereco {
+  display: grid;
+  grid-template-columns: 19px 1fr;
+  gap: 8px;
+  align-items: start;
+  margin-bottom: 8px;
+  color: #e6edf6;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.kv-mini-endereco svg {
+  color: #60a5fa;
+  margin-top: 1px;
+}
+
+.kv-mini-detalhes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+  color: #8fa2b9;
+  font-size: 10px;
+}
+
+.kv-mini-acoes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.kv-mini-card:not(.em-rota) .kv-mini-acoes {
+  grid-template-columns: 1fr;
+}
+
+.kv-mini-btn {
+  min-height: 45px;
+  border-radius: 12px;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.kv-mini-btn.secundario {
+  border: 1px solid var(--line);
+  background: #101d2d;
+  color: #dce7f4;
+}
+
+.kv-mini-btn.principal {
+  width: 100%;
+  min-height: 49px;
+  background: linear-gradient(145deg, #1d4ed8, #2563eb);
+  color: #fff;
+}
+
+.kv-mini-btn.principal.entregue {
+  background: linear-gradient(145deg, #059669, #10b981);
+}
+
+.kv-mini-entregues {
+  display: grid;
+  gap: 8px;
+}
+
+.kv-mini-entregues article {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel);
+  color: #dce7f4;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kv-mini-entregues svg {
+  color: #10b981;
+}
+
+.kv-mini-vazio {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  min-height: 250px;
+  padding: 30px 20px;
+  color: var(--muted);
+}
+
+.kv-mini-vazio.pequeno {
+  min-height: 180px;
+}
+
+.kv-mini-vazio h1,
+.kv-mini-vazio h2 {
+  margin: 8px 0 4px;
+  color: #fff;
+}
+
+.kv-mini-vazio p {
+  margin: 0;
+  max-width: 300px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 420px) {
+  .kv-entregador-min {
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+
+  .kv-mini-header {
+    margin-left: -9px;
+    margin-right: -9px;
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+
+  .kv-mini-rota .leaflet-container {
+    height: 205px !important;
+  }
+
+  .kv-mini-loja h1 {
+    font-size: 18px;
+  }
+}
