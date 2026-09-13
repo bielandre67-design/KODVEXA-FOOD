@@ -57,62 +57,46 @@ async function consultarAcessoFood(contexto) {
     return { ativo: false, status_financeiro: 'nao_configurado', motivo: 'sem_estabelecimento' }
   }
 
-  const candidatos = [
-    estabelecimento.id,
-    estabelecimento.matriz_id,
-    unidades.find((item) => item.tipo_unidade === 'matriz')?.estabelecimento_id,
-  ].filter(Boolean)
+  const { data: sessaoData } = await supabase.auth.getSession()
+  const accessToken = sessaoData?.session?.access_token
 
-  const ids = [...new Set(candidatos.map(String))]
-  let primeiroResultado = null
-
-  for (const estabelecimentoId of ids) {
-    let { data, error } = await supabase.rpc('kodvexa_acesso_produto', {
-      p_estabelecimento_id: estabelecimentoId,
-      p_produto_nome: 'Food',
-    })
-
-    // Compatibilidade temporária se o SQL novo ainda não tiver sido executado.
-    if (error && /kodvexa_acesso_produto|does not exist|PGRST202|42883/i.test(String(error.message || error.code || ''))) {
-      const fallback = await supabase.rpc('kodvexa_produto_ativo', {
-        p_estabelecimento_id: estabelecimentoId,
-        p_produto_nome: 'Food',
-      })
-
-      if (!fallback.error) {
-        const resultadoFallback = {
-          ativo: fallback.data === true,
-          status_financeiro: 'nao_configurado',
-          estabelecimento_id: estabelecimentoId,
-          compatibilidade: true,
-        }
-        if (!primeiroResultado) primeiroResultado = resultadoFallback
-        if (resultadoFallback.ativo) return resultadoFallback
-        continue
-      }
-    }
-
-    if (error) throw error
-
-    const linha = Array.isArray(data) ? data[0] : data
-    const resultado = {
-      ativo: linha?.ativo === true,
-      status_financeiro: linha?.status_financeiro || 'nao_configurado',
-      plano_codigo: linha?.plano_codigo || null,
-      plano_nome: linha?.plano_nome || null,
-      valor_mensal: linha?.valor_mensal ?? null,
-      data_vencimento: linha?.data_vencimento || null,
-      estabelecimento_id: estabelecimentoId,
-    }
-
-    if (!primeiroResultado) primeiroResultado = resultado
-    if (resultado.ativo) return resultado
+  if (!accessToken) {
+    throw new Error('Sua sessão do KODVEXA Food expirou. Entre novamente.')
   }
 
-  return primeiroResultado || {
-    ativo: false,
-    status_financeiro: 'nao_configurado',
-    motivo: 'produto_nao_contratado',
+  const matriz = unidades.find((item) => item.tipo_unidade === 'matriz')
+  const matrizId =
+    estabelecimento.matriz_id ||
+    matriz?.estabelecimento_id ||
+    (estabelecimento.tipo_unidade === 'matriz' ? estabelecimento.id : null)
+
+  const resposta = await fetch('/api/kodvexa-acesso-produto', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      estabelecimento_id: estabelecimento.id,
+      matriz_id: matrizId || estabelecimento.id,
+      produto_nome: 'Food',
+    }),
+  })
+
+  const dados = await resposta.json().catch(() => ({}))
+
+  if (!resposta.ok) {
+    throw new Error(dados?.error || 'Não foi possível validar o acesso ao KODVEXA Food.')
+  }
+
+  return {
+    ativo: dados?.ativo === true,
+    status_financeiro: dados?.status_financeiro || 'nao_configurado',
+    plano_codigo: dados?.plano_codigo || null,
+    plano_nome: dados?.plano_nome || null,
+    valor_mensal: dados?.valor_mensal ?? null,
+    data_vencimento: dados?.data_vencimento || null,
+    estabelecimento_id: estabelecimento.id,
   }
 }
 
