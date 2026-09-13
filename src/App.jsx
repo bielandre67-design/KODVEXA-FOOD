@@ -3,11 +3,19 @@ import { BrowserRouter, Link, Route, Routes, useParams } from 'react-router-dom'
 import { Bell, Bike, CheckCircle2, ChefHat, ChevronRight, Clock3, Home, LayoutGrid, LogOut, MapPin, Menu, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShieldCheck, ShoppingBag, Sparkles, Store, Trash2, UserPlus, Users, X } from 'lucide-react'
 import { supabase } from './supabase'
 import './App.css'
+import Entregador from './entregas/Entregador'
+import RotasPainel from './entregas/RotasPainel'
 
 const dinheiro = (valor) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(valor || 0)
 
 const GEOAPIFY_API_KEY = import.meta.env.VITE_GEOAPIFY_API_KEY
+const KODVEXA_PORTAL_URL = String(import.meta.env.VITE_KODVEXA_PORTAL_URL || '').trim()
+
+function abrirPortalKodvexa() {
+  if (!KODVEXA_PORTAL_URL) return
+  window.location.assign(KODVEXA_PORTAL_URL)
+}
 
 // =====================================================
 // KODVEXA FOOD - MATRIZ / FILIAIS
@@ -39,6 +47,73 @@ async function obterUnidadeAtualCompleta() {
 
   if (error) throw error
   return { unidade, estabelecimento, unidades }
+}
+
+async function consultarAcessoFood(contexto) {
+  const estabelecimento = contexto?.estabelecimento
+  const unidades = contexto?.unidades || []
+
+  if (!estabelecimento?.id) {
+    return { ativo: false, status_financeiro: 'nao_configurado', motivo: 'sem_estabelecimento' }
+  }
+
+  const candidatos = [
+    estabelecimento.id,
+    estabelecimento.matriz_id,
+    unidades.find((item) => item.tipo_unidade === 'matriz')?.estabelecimento_id,
+  ].filter(Boolean)
+
+  const ids = [...new Set(candidatos.map(String))]
+  let primeiroResultado = null
+
+  for (const estabelecimentoId of ids) {
+    let { data, error } = await supabase.rpc('kodvexa_acesso_produto', {
+      p_estabelecimento_id: estabelecimentoId,
+      p_produto_nome: 'Food',
+    })
+
+    // Compatibilidade temporária se o SQL novo ainda não tiver sido executado.
+    if (error && /kodvexa_acesso_produto|does not exist|PGRST202|42883/i.test(String(error.message || error.code || ''))) {
+      const fallback = await supabase.rpc('kodvexa_produto_ativo', {
+        p_estabelecimento_id: estabelecimentoId,
+        p_produto_nome: 'Food',
+      })
+
+      if (!fallback.error) {
+        const resultadoFallback = {
+          ativo: fallback.data === true,
+          status_financeiro: 'nao_configurado',
+          estabelecimento_id: estabelecimentoId,
+          compatibilidade: true,
+        }
+        if (!primeiroResultado) primeiroResultado = resultadoFallback
+        if (resultadoFallback.ativo) return resultadoFallback
+        continue
+      }
+    }
+
+    if (error) throw error
+
+    const linha = Array.isArray(data) ? data[0] : data
+    const resultado = {
+      ativo: linha?.ativo === true,
+      status_financeiro: linha?.status_financeiro || 'nao_configurado',
+      plano_codigo: linha?.plano_codigo || null,
+      plano_nome: linha?.plano_nome || null,
+      valor_mensal: linha?.valor_mensal ?? null,
+      data_vencimento: linha?.data_vencimento || null,
+      estabelecimento_id: estabelecimentoId,
+    }
+
+    if (!primeiroResultado) primeiroResultado = resultado
+    if (resultado.ativo) return resultado
+  }
+
+  return primeiroResultado || {
+    ativo: false,
+    status_financeiro: 'nao_configurado',
+    motivo: 'produto_nao_contratado',
+  }
 }
 
 function normalizarFuncaoAcesso(unidade, unidades = []) {
@@ -1477,6 +1552,103 @@ function CadastroFuncionario() {
   )
 }
 
+function AcessoProdutoFoodBloqueado({ tipo = 'nao_contratado', onSignOut }) {
+  const financeiro = tipo === 'financeiro'
+  const titulo = financeiro ? 'Acesso temporariamente bloqueado' : 'KODVEXA Food não está ativo nesta conta'
+  const texto = financeiro
+    ? 'O produto está vinculado à empresa, mas o acesso foi bloqueado pela situação financeira. Regularize a assinatura para continuar usando o painel.'
+    : 'Este login está válido, porém a Central KODVEXA ainda não liberou o Food para esta empresa.'
+
+  return (
+    <main style={{ minHeight: '100vh', background: '#08111f', display: 'grid', placeItems: 'center', padding: 22, fontFamily: 'Inter, Segoe UI, sans-serif' }}>
+      <section style={{ width: 'min(560px,100%)', background: '#0f1c2e', border: '1px solid #22364f', borderRadius: 22, padding: 28, boxShadow: '0 28px 80px rgba(0,0,0,.28)', color: '#eef5ff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+          <div style={{ width: 46, height: 46, borderRadius: 14, background: '#1268f3', display: 'grid', placeItems: 'center', fontWeight: 950, fontSize: 21 }}>K</div>
+          <div>
+            <strong style={{ display: 'block', fontSize: 15 }}>KODVEXA FOOD</strong>
+            <span style={{ color: '#8ca2bb', fontSize: 12 }}>Controle de acesso da assinatura</span>
+          </div>
+        </div>
+
+        <div style={{ width: 48, height: 48, borderRadius: 14, background: financeiro ? 'rgba(245,158,11,.12)' : 'rgba(59,130,246,.12)', color: financeiro ? '#fbbf24' : '#60a5fa', display: 'grid', placeItems: 'center', marginBottom: 16 }}>
+          <ShieldCheck size={24} />
+        </div>
+        <h1 style={{ margin: 0, fontSize: 24, letterSpacing: '-.03em' }}>{titulo}</h1>
+        <p style={{ margin: '10px 0 0', color: '#a6b8cc', lineHeight: 1.65, fontSize: 14 }}>{texto}</p>
+
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 24 }}>
+          {KODVEXA_PORTAL_URL ? (
+            <button type="button" onClick={abrirPortalKodvexa} style={{ minHeight: 44, border: 0, borderRadius: 11, padding: '0 16px', background: '#1268f3', color: '#fff', fontWeight: 900, cursor: 'pointer' }}>
+              Minha KODVEXA
+            </button>
+          ) : null}
+          <a href="https://wa.me/5551994286092?text=Ol%C3%A1%21%20Preciso%20de%20ajuda%20com%20o%20acesso%20ao%20KODVEXA%20Food." target="_blank" rel="noreferrer" style={{ minHeight: 44, borderRadius: 11, padding: '0 16px', border: '1px solid #314761', color: '#dce9f8', fontWeight: 850, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>
+            Falar com suporte
+          </a>
+          <button type="button" onClick={onSignOut} style={{ minHeight: 44, borderRadius: 11, padding: '0 16px', border: '1px solid #314761', background: 'transparent', color: '#9fb3ca', fontWeight: 850, cursor: 'pointer' }}>
+            Sair
+          </button>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function SsoFoodCallback() {
+  const [mensagem, setMensagem] = useState('Conectando sua conta à KODVEXA Food...')
+  const [erro, setErro] = useState('')
+
+  useEffect(() => {
+    let cancelado = false
+
+    async function concluir() {
+      try {
+        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+        const tokenHash = hash.get('token_hash')
+        const tipo = hash.get('type') || 'magiclink'
+
+        // Remove o token da barra do navegador o mais cedo possível.
+        window.history.replaceState({}, document.title, '/auth/sso')
+
+        if (tokenHash) {
+          const { error } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: tipo,
+          })
+          if (error) throw error
+        } else {
+          const { data } = await supabase.auth.getSession()
+          if (!data?.session) throw new Error('O acesso único expirou. Abra o Food novamente pela Minha KODVEXA.')
+        }
+
+        if (cancelado) return
+        setMensagem('Acesso confirmado. Abrindo o painel...')
+        window.setTimeout(() => window.location.replace('/painel'), 350)
+      } catch (e) {
+        if (!cancelado) setErro(e?.message || 'Não foi possível concluir o acesso único.')
+      }
+    }
+
+    concluir()
+    return () => { cancelado = true }
+  }, [])
+
+  return (
+    <main style={{ minHeight: '100vh', background: '#08111f', display: 'grid', placeItems: 'center', padding: 22, color: '#eef5ff', fontFamily: 'Inter, Segoe UI, sans-serif' }}>
+      <div style={{ width: 'min(500px,100%)', background: '#0f1c2e', border: '1px solid #22364f', borderRadius: 20, padding: 28, textAlign: 'center' }}>
+        <div style={{ width: 48, height: 48, margin: '0 auto 16px', borderRadius: 14, background: '#1268f3', display: 'grid', placeItems: 'center', fontWeight: 950, fontSize: 21 }}>K</div>
+        <strong style={{ display: 'block', fontSize: 18 }}>KODVEXA Food</strong>
+        <p style={{ color: erro ? '#fca5a5' : '#9fb3ca', lineHeight: 1.6, fontSize: 14 }}>{erro || mensagem}</p>
+        {erro ? (
+          <button type="button" onClick={() => window.location.replace('/painel')} style={{ marginTop: 8, minHeight: 43, border: 0, borderRadius: 10, padding: '0 16px', background: '#1268f3', color: '#fff', fontWeight: 900, cursor: 'pointer' }}>
+            Ir para o login
+          </button>
+        ) : null}
+      </div>
+    </main>
+  )
+}
+
 function LoginPainel({ pagina = 'pedidos' }) {
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
@@ -1486,6 +1658,7 @@ function LoginPainel({ pagina = 'pedidos' }) {
   const [funcaoAtual, setFuncaoAtual] = useState('')
   const [checandoAcesso, setChecandoAcesso] = useState(false)
   const [erroAcesso, setErroAcesso] = useState('')
+  const [acessoFood, setAcessoFood] = useState(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSessao(data.session))
@@ -1500,6 +1673,7 @@ function LoginPainel({ pagina = 'pedidos' }) {
       if (!sessao?.user?.id) {
         setFuncaoAtual('')
         setErroAcesso('')
+        setAcessoFood(null)
         return
       }
 
@@ -1514,8 +1688,14 @@ function LoginPainel({ pagina = 'pedidos' }) {
         setFuncaoAtual(funcao)
 
         if (!contexto?.estabelecimento) {
+          setAcessoFood(null)
           setErroAcesso('Este usuário ainda não possui acesso a nenhuma unidade.')
+          return
         }
+
+        const acessoProduto = await consultarAcessoFood(contexto)
+        if (cancelado) return
+        setAcessoFood(acessoProduto)
       } catch (e) {
         if (!cancelado) {
           setErroAcesso(e.message || 'Não foi possível verificar seu acesso.')
@@ -1541,6 +1721,12 @@ function LoginPainel({ pagina = 'pedidos' }) {
   if (sessao) {
     if (checandoAcesso) return <TelaCentral texto="Verificando acesso..." />
     if (erroAcesso) return <TelaCentral texto={erroAcesso} erro />
+    if (!acessoFood?.ativo) {
+      return <AcessoProdutoFoodBloqueado onSignOut={() => supabase.auth.signOut()} />
+    }
+    if (acessoFood?.status_financeiro === 'bloqueado') {
+      return <AcessoProdutoFoodBloqueado tipo="financeiro" onSignOut={() => supabase.auth.signOut()} />
+    }
 
     const permissoes = {
       dono: ['pedidos', 'cardapio', 'entregas', 'configuracoes', 'unidades', 'equipe'],
@@ -1577,6 +1763,23 @@ function LoginPainel({ pagina = 'pedidos' }) {
         <label>Senha<input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} required /></label>
         {erro && <div className="erro-pedido">{erro}</div>}
         <button className="primario" disabled={entrando}>{entrando ? 'Entrando...' : 'Entrar'}</button>
+
+        {KODVEXA_PORTAL_URL ? (
+          <a
+            href={KODVEXA_PORTAL_URL}
+            style={{
+              display: 'block',
+              marginTop: 4,
+              color: '#9abdf6',
+              textAlign: 'center',
+              fontSize: '.76rem',
+              fontWeight: 850,
+              textDecoration: 'none',
+            }}
+          >
+            ← Voltar para Minha KODVEXA
+          </a>
+        ) : null}
 
         <Link
           to="/painel/cadastro"
@@ -2511,6 +2714,11 @@ function NavegacaoPainel({ loja, ativo }) {
         </div>
 
         <div className="acoes-topo acoes-lateral">
+          {KODVEXA_PORTAL_URL ? (
+            <button onClick={() => { abrirPortalKodvexa(); fecharMenu() }}>
+              <LayoutGrid /><span>Minha KODVEXA</span>
+            </button>
+          ) : null}
           {loja?.slug && (
             <button onClick={() => { window.open(`/cardapio/${loja.slug}`, '_blank'); fecharMenu() }}>
               <Store /><span>Ver cardápio</span>
@@ -8683,6 +8891,8 @@ function PainelRestaurante({ sessao }) {
           <div style={{ minWidth: 0, padding: '18px 20px' }}><Bike /><span>Saiu para entrega</span><strong>{pedidos.filter((p) => p.status === 'saiu_entrega').length}</strong></div>
         </section>
 
+        <RotasPainel loja={loja} pedidos={pedidos} />
+
         <div
           className="cabecalho-lista"
           style={{
@@ -9028,6 +9238,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Inicio />} />
         <Route path="/cardapio/:slug" element={<Cardapio />} />
+        <Route path="/entregador" element={<Entregador />} />
+        <Route path="/auth/sso" element={<SsoFoodCallback />} />
         <Route path="/painel/convite" element={<ConviteEquipe />} />
         <Route path="/painel/cadastro" element={<CadastroFuncionario />} />
         <Route path="/painel" element={<LoginPainel />} />
