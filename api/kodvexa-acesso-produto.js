@@ -48,17 +48,20 @@ export default async function handler(req, res) {
 
   try {
     const foodUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
-    const foodServiceRole =
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY
+    const foodPublicKey =
+      process.env.SUPABASE_PUBLISHABLE_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY
 
     const centralUrl = process.env.KODVEXA_CENTRAL_SUPABASE_URL
     const centralServiceRole =
       process.env.KODVEXA_CENTRAL_SUPABASE_SERVICE_ROLE_KEY ||
       process.env.KODVEXA_CENTRAL_SUPABASE_SECRET_KEY
 
-    if (!foodUrl || !foodServiceRole) {
+    if (!foodUrl || !foodPublicKey) {
       return responder(res, 500, {
-        error: 'Supabase do Food não está configurado no servidor.',
+        error: 'Conexão pública do Supabase do Food não está configurada no servidor.',
       })
     }
 
@@ -73,12 +76,21 @@ export default async function handler(req, res) {
       return responder(res, 401, { error: 'Sessão do Food não encontrada.' })
     }
 
-    const adminFood = createClient(foodUrl, foodServiceRole, {
-      auth: { persistSession: false, autoRefreshToken: false },
+    // Usa a sessão REAL do usuário do Food. Assim não precisamos consultar
+    // estabelecimento_usuarios diretamente com uma chave administrativa.
+    const foodUsuario = createClient(foodUrl, foodPublicKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      global: {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
     })
 
     const { data: usuarioFoodData, error: usuarioFoodError } =
-      await adminFood.auth.getUser(accessToken)
+      await foodUsuario.auth.getUser(accessToken)
 
     const usuarioFood = usuarioFoodData?.user
     if (usuarioFoodError || !usuarioFood?.id || !usuarioFood?.email) {
@@ -88,44 +100,78 @@ export default async function handler(req, res) {
     }
 
     const estabelecimentoId = String(req.body?.estabelecimento_id || '').trim()
-    const matrizId = String(req.body?.matriz_id || estabelecimentoId).trim()
+    const matrizIdInformada = String(req.body?.matriz_id || '').trim()
 
     if (!estabelecimentoId) {
       return responder(res, 400, { error: 'Estabelecimento não informado.' })
     }
 
-    // Garante que o usuário autenticado realmente pertence à unidade Food informada.
-    const idsPermitidos = [...new Set([estabelecimentoId, matrizId].filter(Boolean))]
-    const { data: vinculosFood, error: vinculosFoodError } = await adminFood
-      .from('estabelecimento_usuarios')
-      .select('estabelecimento_id, funcao')
-      .eq('usuario_id', usuarioFood.id)
-      .in('estabelecimento_id', idsPermitidos)
+    // A própria função do Food já aplica o vínculo do usuário autenticado.
+    const { data: unidades, error: unidadesError } =
+      await foodUsuario.rpc('get_meus_estabelecimentos')
 
-    if (vinculosFoodError) throw vinculosFoodError
-    if (!vinculosFood?.length) {
+    if (unidadesError) {
+      console.error('Erro ao carregar unidades do Food:', unidadesError)
+      return responder(res, 403, {
+        error: 'Não foi possível validar as unidades desta conta no KODVEXA Food.',
+      })
+    }
+
+    const idsUnidades = [...new Set(
+      (unidades || [])
+        .map((item) => item?.estabelecimento_id)
+        .filter(Boolean)
+        .map(String)
+    )]
+
+    if (!idsUnidades.includes(estabelecimentoId)) {
       return responder(res, 403, {
         error: 'Esta conta não possui acesso à unidade Food informada.',
       })
     }
 
-    const idBaseFood = matrizId || estabelecimentoId
-    const { data: lojaFood, error: lojaFoodError } = await adminFood
+    // Lê somente estabelecimentos que o próprio usuário já pode enxergar no Food.
+    const { data: lojasFood, error: lojasFoodError } = await foodUsuario
       .from('estabelecimentos')
-      .select('*')
-      .eq('id', idBaseFood)
-      .maybeSingle()
+      .select('id, nome, nome_unidade, matriz_id, tipo_unidade')
+      .in('id', idsUnidades)
 
-    if (lojaFoodError) throw lojaFoodError
+    if (lojasFoodError) {
+      console.error('Erro ao localizar estabelecimentos Food:', lojasFoodError)
+      return responder(res, 403, {
+        error: 'Não foi possível identificar a unidade Food desta conta.',
+      })
+    }
 
-    const nomeFood =
-      lojaFood?.nome ||
-      lojaFood?.nome_unidade ||
-      ''
+    const lojaAtual = (lojasFood || []).find(
+      (item) => String(item.id) === estabelecimentoId
+    ) || null
 
-    // Agora consulta a Central usando uma chave somente de servidor.
+    const matrizVisivel = (lojasFood || []).find(
+      (item) => String(item.tipo_unidade || '').toLowerCase() === 'matriz'
+    ) || null
+
+    const matrizId =
+      String(lojaAtual?.matriz_id || '').trim() ||
+      (matrizIdInformada && idsUnidades.includes(matrizIdInformada)
+        ? matrizIdInformada
+        : '') ||
+      String(matrizVisivel?.id || '').trim() ||
+      estabelecimentoId
+
+    const lojaBase =
+      (lojasFood || []).find((item) => String(item.id) === matrizId) ||
+      lojaAtual
+
+    const nomeFood = lojaBase?.nome || lojaBase?.nome_unidade || ''
+
+    // Daqui para frente a Central é consultada apenas no servidor.
     const adminCentral = createClient(centralUrl, centralServiceRole, {
-      auth: { persistSession: false, autoRefreshToken: false },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
     })
 
     const usuarioCentral = await localizarUsuarioPorEmail(
@@ -191,7 +237,10 @@ export default async function handler(req, res) {
 
     if (vinculoError) throw vinculoError
 
-    const ativo = Boolean(vinculo && String(vinculo.status || '').toLowerCase() !== 'inativo')
+    const ativo = Boolean(
+      vinculo && String(vinculo.status || '').toLowerCase() !== 'inativo'
+    )
+
     const statusFinanceiro =
       vinculo?.status_financeiro ||
       empresaCentral.status_financeiro ||

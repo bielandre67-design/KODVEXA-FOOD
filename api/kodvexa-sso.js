@@ -221,19 +221,9 @@ export default async function handler(req, res) {
       })
     }
 
-    // Confirma que esse usuário realmente pertence a alguma unidade Food.
-    const { data: acessoFood, error: acessoFoodError } = await adminFood
-      .from('estabelecimento_usuarios')
-      .select('estabelecimento_id, funcao')
-      .eq('usuario_id', usuarioFood.id)
-      .limit(1)
-
-    if (acessoFoodError || !acessoFood?.length) {
-      console.error('Conta Food sem unidade vinculada:', acessoFoodError)
-      return responder(req, res, 403, {
-        error: 'Sua conta existe no Food, mas ainda não está vinculada a uma unidade.',
-      })
-    }
+    // A vinculação da unidade é validada pelo próprio painel Food após o login,
+    // usando get_meus_estabelecimentos com a sessão do usuário. Evitamos consultar
+    // estabelecimento_usuarios diretamente aqui para não depender de grants da tabela.
 
     const { data: linkData, error: linkError } =
       await adminFood.auth.admin.generateLink({
