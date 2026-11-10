@@ -1566,7 +1566,7 @@ function AcessoProdutoFoodBloqueado({ tipo = 'nao_contratado', onSignOut }) {
               Minha KODVEXA
             </button>
           ) : null}
-          <a href="https://wa.me/5551994286092?text=Ol%C3%A1%21%20Preciso%20de%20ajuda%20com%20o%20acesso%20ao%20KODVEXA%20Food." target="_blank" rel="noreferrer" style={{ minHeight: 44, borderRadius: 11, padding: '0 16px', border: '1px solid #314761', color: '#dce9f8', fontWeight: 850, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>
+          <a href="https://admin.kodvexa.com.br/api/suporte-oficial?produto=food" target="_blank" rel="noreferrer" style={{ minHeight: 44, borderRadius: 11, padding: '0 16px', border: '1px solid #314761', color: '#dce9f8', fontWeight: 850, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>
             Falar com suporte
           </a>
           <button type="button" onClick={onSignOut} style={{ minHeight: 44, borderRadius: 11, padding: '0 16px', border: '1px solid #314761', background: 'transparent', color: '#9fb3ca', fontWeight: 850, cursor: 'pointer' }}>
