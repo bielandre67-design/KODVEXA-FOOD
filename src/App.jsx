@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, Link, Route, Routes, useParams } from 'react-router-dom'
-import { Bell, Bike, CheckCircle2, ChefHat, ChevronRight, Clock3, Home, LayoutGrid, LogOut, MapPin, Menu, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShieldCheck, ShoppingBag, Sparkles, Store, Trash2, UserPlus, Users, X } from 'lucide-react'
+import { Bell, Bike, CheckCircle2, CreditCard, ChefHat, ChevronRight, Clock3, Home, LayoutGrid, LogOut, MapPin, Menu, Minus, Navigation, Plus, Printer, RefreshCw, Search, ShieldCheck, ShoppingBag, Sparkles, Store, Trash2, UserPlus, Users, X } from 'lucide-react'
 import { supabase } from './supabase'
 import './App.css'
 import Entregador from './entregas/Entregador'
@@ -2690,6 +2690,8 @@ function NavegacaoPainel({ loja, ativo }) {
             </>
           )}
         </nav>
+
+        {ehDono && <a href="https://admin.kodvexa.com.br/portal-financeiro" target="_blank" rel="noopener noreferrer" style={{display:'flex',alignItems:'center',gap:12,minHeight:44,padding:'12px 16px',margin:'10px 13px',borderRadius:10,background:'rgba(27,99,197,.12)',color:'#e2eeff',fontWeight:750,textDecoration:'none',fontSize:13}}><CreditCard size={18}/> Financeiro KODVEXA</a>}
 
         <div className="lateral-resumo">
           <span>LINK DA LOJA</span>
