@@ -1561,7 +1561,11 @@ function AcessoProdutoFoodBloqueado({ tipo = 'nao_contratado', onSignOut }) {
         <p style={{ margin: '10px 0 0', color: '#a6b8cc', lineHeight: 1.65, fontSize: 14 }}>{texto}</p>
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 24 }}>
-          {KODVEXA_PORTAL_URL ? (
+          {financeiro ? (
+            <a className="food-financeiro-acesso" href="https://admin.kodvexa.com.br/portal-financeiro?origem=food">
+              Acessar financeiro
+            </a>
+          ) : KODVEXA_PORTAL_URL ? (
             <button type="button" onClick={abrirPortalKodvexa} style={{ minHeight: 44, border: 0, borderRadius: 11, padding: '0 16px', background: '#1268f3', color: '#fff', fontWeight: 900, cursor: 'pointer' }}>
               Minha KODVEXA
             </button>
